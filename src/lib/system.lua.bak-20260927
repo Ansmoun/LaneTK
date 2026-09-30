@@ -1,0 +1,73 @@
+-- system.lua: super panel de sistema. Coordina todos los tabs del
+-- panel original de Awesome: Inicio, Recursos, Red, Batería, Discos,
+-- Procesos, Buscar. Laboratorio queda pendiente.
+
+local PanelApp = require("lib.panelapp")
+local W        = require("lib.widgets")
+local log      = require("lib.log")
+
+local M = {}
+
+-- Lista de tabs con su modulo. Cada factory recibe (srv, theme) y
+-- devuelve { widget, start?, stop? }.
+-- Iconos: nombres de los PNG en ~/proyectos/lanetk/icons-png/32/
+-- (nombre sin extension). Ver icons/tabs/ en tu Awesome.
+local TAB_DEFS = {
+    { id = "sys",       label = "Inicio",       icon = "home",     module = "lib.tabs.sys" },
+    { id = "resources", label = "Recursos",     icon = "chip",     module = "lib.tabs.resources" },
+    { id = "net",       label = "Red",          icon = "wifi",     module = "lib.tabs.net" },
+    { id = "bat",       label = "Batería",      icon = "battery",  module = "lib.tabs.bat" },
+    { id = "disks",     label = "Discos",       icon = "disk",     module = "lib.tabs.disks" },
+    { id = "proc",      label = "Procesos",     icon = "list",     module = "lib.tabs.proc" },
+    { id = "search",    label = "Buscar",       icon = "search",   module = "lib.tabs.search" },
+}
+
+function M.build_tab_list(srv, theme)
+    local tabs = {}
+    for _, d in ipairs(TAB_DEFS) do
+        tabs[#tabs + 1] = {
+            id      = d.id,
+            label   = d.label,
+            icon    = d.icon,
+            factory = (function(mod_name)
+                return function()
+                    log.info("system", "cargando tab '%s' (%s)",
+                        d.id, mod_name)
+                    local mod = require(mod_name)
+                    return mod.new(srv, theme)
+                end
+            end)(d.module),
+        }
+    end
+    return tabs
+end
+
+-- Crea el PanelApp con todos los tabs. opts:
+--   trigger_path : path del archivo de trigger (opcional)
+--   width, height, title
+function M.new(opts)
+    opts = opts or {}
+    local srv = opts.server
+    if not srv then
+        error("system.new: opts.server es obligatorio")
+    end
+
+    local app = PanelApp.new {
+        server = srv,
+        theme  = opts.theme,
+        trigger_path = opts.trigger_path,
+        panel_opts = {
+            title  = opts.title or "Panel de sistema",
+            width  = opts.width or "70%",
+            height = opts.height or "75%",
+            x      = opts.x or "center",
+            y      = opts.y or "center",
+            theme  = opts.theme,
+            tabs   = M.build_tab_list(srv, opts.theme),
+        },
+    }
+
+    return app
+end
+
+return M

@@ -1,0 +1,4 @@
+#!/bin/sh
+cd "$(dirname "$0")"
+export LUA_PATH="./src/?.lua;./src/?/init.lua;./bindings/?.lua;./bindings/?/init.lua;;"
+exec luajit "$@"

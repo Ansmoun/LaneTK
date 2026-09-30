@@ -1,0 +1,619 @@
+-- lib/anim.lua
+-- Motor de animaciones. Pool de animaciones activas con un timer
+-- global que solo corre mientras hay animaciones. En reposo, coste
+-- cero (no hay timer registrado).
+
+local log       = require("lib.log")
+local timer_mod = require("lib.timer")
+
+local M = {}
+
+local srv      = nil
+local timer    = nil
+local active   = {}
+local FPS      = 30
+local FRAME_MS = 33
+local crossfade_depth     = 0
+local crossfade_saved_fps = 30
+
+-- ── Easing functions ──────────────────────────────────────────
+
+M.EASE = {
+    linear = function(t) return t end,
+
+    in_quad     = function(t) return t * t end,
+    out_quad    = function(t) return 1 - (1 - t) * (1 - t) end,
+    in_out_quad = function(t)
+        if t < 0.5 then return 2 * t * t end
+        return 1 - (-2 * t + 2) ^ 2 / 2
+    end,
+
+    in_cubic     = function(t) return t * t * t end,
+    out_cubic    = function(t) return 1 - (1 - t) ^ 3 end,
+    in_out_cubic = function(t)
+        if t < 0.5 then return 4 * t * t * t end
+        return 1 - (-2 * t + 2) ^ 3 / 2
+    end,
+
+    in_quart     = function(t) return t * t * t * t end,
+    out_quart    = function(t) return 1 - (1 - t) ^ 4 end,
+    in_out_quart = function(t)
+        if t < 0.5 then return 8 * t * t * t * t end
+        return 1 - (-2 * t + 2) ^ 4 / 2
+    end,
+
+    in_expo  = function(t)
+        if t == 0 then return 0 end
+        return 2 ^ (10 * t - 10)
+    end,
+    out_expo = function(t)
+        if t == 1 then return 1 end
+        return 1 - 2 ^ (-10 * t)
+    end,
+    in_out_expo = function(t)
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        if t < 0.5 then return 2 ^ (20 * t - 10) / 2 end
+        return (2 - 2 ^ (-20 * t + 10)) / 2
+    end,
+
+    out_back = function(t)
+        local c1, c3 = 1.70158, 2.70158
+        return 1 + c3 * (t - 1) ^ 3 + c1 * (t - 1) ^ 2
+    end,
+    in_back = function(t)
+        local c1, c3 = 1.70158, 2.70158
+        return c3 * t * t * t - c1 * t * t
+    end,
+
+    out_elastic = function(t)
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local c4 = (2 * math.pi) / 3
+        return 2 ^ (-10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
+    end,
+
+    out_bounce = function(t)
+        local n1, d1 = 7.5625, 2.75
+        if t < 1 / d1 then return n1 * t * t end
+        if t < 2 / d1 then
+            t = t - 1.5 / d1
+            return n1 * t * t + 0.75
+        end
+        if t < 2.5 / d1 then
+            t = t - 2.25 / d1
+            return n1 * t * t + 0.9375
+        end
+        t = t - 2.625 / d1
+        return n1 * t * t + 0.984375
+    end,
+}
+
+-- ── Estado global ─────────────────────────────────────────────
+
+function M.init(server, opts)
+    srv = server
+    if opts and opts.fps then
+        FPS = opts.fps
+        FRAME_MS = math.max(1, math.floor(1000 / FPS))
+    end
+    log.info("anim", "init (fps=%d)", FPS)
+end
+
+
+
+function M.count() return #active end
+function M.fps()   return FPS end
+
+local function stop_timer()
+    if timer then timer:cancel(); timer = nil end
+end
+
+-- Forward declaration (tick se usa en ensure_timer, ensure_timer en
+-- push, push en tick → mutuo).
+local tick
+local ensure_timer
+local run_on_done
+
+local function reap()
+    local keep = {}
+    for _, a in ipairs(active) do
+        if not a.done then keep[#keep + 1] = a end
+    end
+    active = keep
+    if #active == 0 then stop_timer() end
+end
+
+run_on_done = function(a)
+    if a.on_done then
+        local ok, err = pcall(a.on_done)
+        if not ok then
+            log.error("anim", "on_done fallo: %s", tostring(err))
+        end
+    end
+end
+
+tick = function()
+    if #active == 0 then stop_timer(); return end
+
+    local now = timer_mod.now_ms()
+    local snapshot = {}
+    for i, a in ipairs(active) do snapshot[i] = a end
+
+    for _, a in ipairs(snapshot) do
+        if not a.done then
+            if a.is_spring then
+                local dt = FRAME_MS / 1000
+                local dx = a.target - a.pos
+                local accel = a.tension * dx - a.friction * a.vel
+                a.vel = a.vel + accel * dt
+                a.pos = a.pos + a.vel * dt
+                local ok, err = pcall(a.apply, a.pos, a.pos)
+                if not ok then
+                    log.error("anim", "spring apply fallo: %s",
+                        tostring(err))
+                end
+                if math.abs(dx) < 0.001 and math.abs(a.vel) < 0.001 then
+                    a.apply(a.target, a.target)
+                    a.done = true
+                    run_on_done(a)
+                end
+            else
+                local t = (now - a.start_ms) / a.duration_ms
+                if t > 1 then t = 1 end
+                local eased = a.easing(t)
+                local ok, err = pcall(a.apply, eased, t)
+                if not ok then
+                    log.error("anim", "apply fallo: %s", tostring(err))
+                end
+                if t >= 1 then
+                    a.done = true
+                    run_on_done(a)
+                end
+            end
+        end
+    end
+
+    reap()
+end
+
+ensure_timer = function()
+    if timer then return end
+    timer = srv:add_timer(FRAME_MS, tick)
+end
+
+local function make_handle(a)
+    return {
+        cancel = function() a.done = true end,
+        get    = function() return a end,
+    }
+end
+
+local function push(a)
+    active[#active + 1] = a
+    ensure_timer()
+    return make_handle(a)
+end
+
+-- ── API básica ────────────────────────────────────────────────
+
+function M.tween(area, prop, from, to, duration_ms, easing, on_done)
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+    local a = {
+        start_ms    = timer_mod.now_ms(),
+        duration_ms = duration_ms,
+        easing      = easing or M.EASE.out_quad,
+        apply = function(eased)
+            area[prop] = from + (to - from) * eased
+            if area.damage then area:damage() end
+        end,
+        on_done = on_done,
+    }
+    return push(a)
+end
+
+function M.tween_rgb(area, prop, from, to, duration_ms, easing, on_done)
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+    local from_c = { from[1], from[2], from[3] }
+    local to_c   = { to[1],   to[2],   to[3] }
+    local tgt = area[prop]
+    if not tgt then
+        tgt = { 0, 0, 0 }
+        area[prop] = tgt
+    end
+    local a = {
+        start_ms    = timer_mod.now_ms(),
+        duration_ms = duration_ms,
+        easing      = easing or M.EASE.out_quad,
+        apply = function(eased)
+            tgt[1] = from_c[1] + (to_c[1] - from_c[1]) * eased
+            tgt[2] = from_c[2] + (to_c[2] - from_c[2]) * eased
+            tgt[3] = from_c[3] + (to_c[3] - from_c[3]) * eased
+            if area.damage then area:damage() end
+        end,
+        on_done = on_done,
+    }
+    return push(a)
+end
+
+function M.tween_custom(area, apply_fn, duration_ms, easing, on_done)
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+    local a = {
+        start_ms    = timer_mod.now_ms(),
+        duration_ms = duration_ms,
+        easing      = easing or M.EASE.out_quad,
+        apply = function(eased, raw)
+            apply_fn(eased, raw)
+            if area and area.damage then area:damage() end
+        end,
+        on_done = on_done,
+    }
+    return push(a)
+end
+
+-- ── Spring ────────────────────────────────────────────────────
+
+function M.spring(area, prop, target, opts, on_done)
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+    opts = opts or {}
+    local a = {
+        is_spring = true,
+        tension   = opts.tension  or 200,
+        friction  = opts.friction or 20,
+        target    = target,
+        pos       = area[prop] or 0,
+        vel       = opts.velocity or 0,
+        apply = function(pos)
+            area[prop] = pos
+            if area.damage then area:damage() end
+        end,
+        on_done = on_done,
+    }
+    return push(a)
+end
+
+-- ── Composición ───────────────────────────────────────────────
+
+function M.delay(ms, fn)
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+    local a = {
+        start_ms    = timer_mod.now_ms(),
+        duration_ms = ms,
+        easing      = M.EASE.linear,
+        apply       = function() end,
+        on_done     = fn,
+    }
+    return push(a)
+end
+
+function M.sequence(steps, on_done)
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+    local i = 0
+    local function next_step()
+        i = i + 1
+        if i > #steps then
+            if on_done then on_done() end
+            return
+        end
+        local s = steps[i]
+        local k = s.kind or "tween"
+        if k == "tween" then
+            M.tween(s.area, s.prop, s.from, s.to, s.duration,
+                s.easing, next_step)
+        elseif k == "tween_rgb" then
+            M.tween_rgb(s.area, s.prop, s.from, s.to, s.duration,
+                s.easing, next_step)
+        elseif k == "custom" then
+            M.tween_custom(s.area, s.apply, s.duration,
+                s.easing, next_step)
+        elseif k == "spring" then
+            M.spring(s.area, s.prop, s.to, s.opts, next_step)
+        elseif k == "delay" then
+            M.delay(s.duration, next_step)
+        elseif k == "fn" then
+            pcall(s.fn)
+            next_step()
+        else
+            log.warn("anim", "sequence: kind desconocido '%s'", k)
+            next_step()
+        end
+    end
+    next_step()
+end
+
+-- Repite una animación al terminar. Acepta números (tween) o tablas
+-- {r,g,b} (tween_rgb). mode = "repeat" o "ping-pong".
+function M.loop(area, prop, from, to, duration_ms, easing, mode, on_cycle)
+    mode = mode or "repeat"
+    local is_rgb = (type(from) == "table")
+    local handle = { cancelled = false }
+    local phase = 1
+
+    local function step()
+        if handle.cancelled then return end
+        local a, b
+        if mode == "ping-pong" and phase == 2 then
+            a, b = to, from
+        else
+            a, b = from, to
+        end
+
+        local function cb()
+            if handle.cancelled then return end
+            if on_cycle then
+                local ok, err = pcall(on_cycle, phase)
+                if not ok then
+                    log.error("anim", "loop cycle fallo: %s",
+                        tostring(err))
+                end
+            end
+            if mode == "ping-pong" then
+                phase = (phase == 1) and 2 or 1
+            end
+            step()
+        end
+
+        if is_rgb then
+            handle._inner = M.tween_rgb(area, prop, a, b,
+                duration_ms, easing, cb)
+        else
+            handle._inner = M.tween(area, prop, a, b,
+                duration_ms, easing, cb)
+        end
+    end
+
+    step()
+
+    return {
+        cancel = function()
+            handle.cancelled = true
+            if handle._inner then handle._inner:cancel() end
+        end,
+    }
+end
+
+function M.stagger(list, opts)
+    opts = opts or {}
+    local duration = opts.duration or 300
+    local delay    = opts.delay    or 40
+    local easing   = opts.easing   or M.EASE.out_cubic
+    local on_done  = opts.on_done
+    local handles = {}
+
+    for i, item in ipairs(list) do
+        local wait = (i - 1) * delay
+        M.delay(wait, function()
+            handles[i] = M.tween(item[1], item[2], item[3], item[4],
+                duration, easing, (i == #list) and on_done or nil)
+        end)
+    end
+
+    return {
+        cancel = function()
+            for _, h in pairs(handles) do
+                if h and h.cancel then h:cancel() end
+            end
+        end,
+    }
+end
+
+-- ── Snapshot y crossfade ─────────────────────────────────────
+
+-- Renderiza un Area a un image_surface ARGB32 del tamaño del área.
+-- El origen del surface corresponde a (area.x0, area.y0). Fuerza
+-- should_draw = true durante el snapshot para que el árbol completo
+-- se dibuje aunque el damage_list esté vacío.
+function M.snapshot(area, opts)
+    opts = opts or {}
+    local w = opts.w or area:getWidth()
+    local h = opts.h or area:getHeight()
+    if not w or not h or w <= 0 or h <= 0 then return nil end
+
+    local cairo = require("lib.cairo")
+    local surface = cairo.image_surface_create(w, h, cairo.FORMAT.ARGB32)
+    local cr = cairo.context(surface)
+
+    local win = area.window
+    local saved_force, saved_damage
+    if win then
+        saved_force = win.force_redraw
+        saved_damage = win.damage_list
+        win.force_redraw = true
+        win.damage_list = {}
+    end
+
+    cairo.save(cr)
+    cairo.translate(cr, -area.x0, -area.y0)
+    area:draw(cr)
+    cairo.restore(cr)
+    cairo.flush_surface(surface)
+    cairo.destroy_context(cr)
+
+    if win then
+        win.force_redraw = saved_force
+        win.damage_list = saved_damage
+    end
+
+    return surface
+end
+
+-- Crossfade entre un área vieja y un área nueva. Hace:
+--   1. snapshot del área vieja.
+--   2. set_overlay con ese snapshot (alpha 1).
+--   3. llama swap_fn() para que el consumidor cambie el contenido.
+--   4. anima el alpha del overlay de 1 a 0.
+--   5. limpia el overlay y destruye el surface.
+-- Crossfade entre un área vieja y un área nueva. Hace:
+--   1. Si hay un crossfade en curso, lo cancela y limpia su surface.
+--   2. snapshot del área vieja.
+--   3. set_overlay con ese snapshot (alpha 1).
+--   4. llama swap_fn() para que el consumidor cambie el contenido.
+--   5. anima el alpha del overlay de 1 a 0.
+--   6. limpia el overlay y destruye el surface.
+--
+-- Solo puede haber un crossfade activo a la vez. Llamar a crossfade
+-- durante uno activo cancela el anterior y empieza el nuevo desde
+-- el estado actual del Stack (sin snapshot intermedio del overlay).
+-- Crossfade entre un área vieja y un área nueva. Hace:
+--   1. Si hay un crossfade en curso, lo cancela y limpia su surface.
+--   2. snapshot del área vieja.
+--   3. set_overlay con ese snapshot (alpha 1).
+--   4. llama swap_fn() para que el consumidor cambie el contenido.
+--   5. anima el alpha del overlay de 1 a 0.
+--   6. limpia el overlay y destruye el surface.
+--
+-- Solo puede haber un crossfade activo a la vez. Llamar a crossfade
+-- durante uno activo cancela el anterior y empieza el nuevo desde
+-- el estado actual del Stack (sin snapshot intermedio del overlay).
+function M.crossfade(window, old_area, swap_fn, duration_ms, opts)
+    opts = opts or {}
+    if not srv then error("anim: llama a anim.init(srv) primero") end
+
+    -- Cancelar crossfade anterior si lo hay.
+    if M._current then
+        local prev = M._current
+        M._current = nil
+        if prev.handle then prev.handle:cancel() end
+        if prev.snap then
+            local cairo = require("lib.cairo")
+            cairo.destroy_surface(prev.snap)
+            prev.snap = nil
+        end
+        if window.overlay then
+            window:clear_overlay()
+        end
+    end
+
+    local orig_x0, orig_y0, orig_x1, orig_y1 =
+        old_area.x0, old_area.y0, old_area.x1, old_area.y1
+    local snap = M.snapshot(old_area)
+    local snap = M.snapshot(old_area)
+    local snap = M.snapshot(old_area)
+    log.info("animdiag", "pre-snapshot: %d,%d-%d,%d", old_area.x0, old_area.y0, old_area.x1, old_area.y1)
+    if not snap then
+        return nil
+    end
+
+    local is_first = (crossfade_depth == 0)
+    crossfade_depth = crossfade_depth + 1
+    if opts.fps and is_first then
+        crossfade_saved_fps = FPS
+        M.set_fps(opts.fps)
+    end
+
+    window:set_overlay(snap, old_area.x0, old_area.y0, 1.0)
+    if swap_fn then swap_fn() end
+    if swap_fn then swap_fn() end
+    -- Si el rect del área cambió tras el swap (los
+    -- sub-tabs con layouts distintos ajustan mínimos y
+    -- el rect se desplaza ligeramente), el overlay queda
+    -- desalineado con el árbol nuevo y tapa contenido
+    -- con basura vieja en los primeros frames. Cancelar
+    -- el crossfade y dejar el cambio directo.
+    if old_area.x0 ~= orig_x0 or old_area.y0 ~= orig_y0
+       or old_area.x1 ~= orig_x1 or old_area.y1 ~= orig_y1 then
+        local cairo_mod = require("lib.cairo")
+        cairo_mod.destroy_surface(snap)
+        window:clear_overlay()
+        crossfade_depth = crossfade_depth - 1
+        if opts.fps and crossfade_depth == 0 then
+            M.set_fps(crossfade_saved_fps)
+        end
+        return nil
+    end
+    log.info("animdiag", "post-swap:   %d,%d-%d,%d", old_area.x0, old_area.y0, old_area.x1, old_area.y1)
+
+    local cairo = require("lib.cairo")
+    local initial_w = window.width
+    local initial_h = window.height
+    local extra = opts.extra_damage_area
+
+    local state = {
+        snap = snap,
+        cancelled = false,
+    }
+
+    local function cleanup(call_on_done)
+        if state.snap then
+            cairo.destroy_surface(state.snap)
+            state.snap = nil
+        end
+        M._current = nil
+        if window.overlay then
+            window:clear_overlay()
+        end
+        crossfade_depth = crossfade_depth - 1
+        if opts.fps and crossfade_depth == 0 then
+            M.set_fps(crossfade_saved_fps)
+        end
+        if call_on_done and opts.on_done then
+            opts.on_done()
+        end
+    end
+
+    local handle
+    handle = M.tween_custom(window, function(eased)
+        if state.cancelled then return end
+
+        if window.width ~= initial_w or window.height ~= initial_h then
+            state.cancelled = true
+            cleanup(false)
+            if handle then handle:cancel() end
+            return
+        end
+
+        if window.overlay then
+            window.overlay.alpha = 1.0 - eased
+        end
+        local ov = window.overlay
+        if ov then
+            local w = cairo.surface_width(ov.surface)
+            local h = cairo.surface_height(ov.surface)
+            window:add_damage(ov.x, ov.y, ov.x + w, ov.y + h)
+        end
+        -- Dañar también el área extra (TabsBar) para que se repinte
+        -- en cada frame del crossfade. Sin esto, el TabsBar queda
+        -- fuera del damage parcial y su estado visual puede quedar
+        -- desincronizado con el tab activo en ventanas grandes.
+        if extra and extra.x1 > extra.x0 then
+            window:add_damage(extra.x0, extra.y0, extra.x1, extra.y1)
+        end
+    end, duration_ms or 300, opts.easing or M.EASE.out_cubic, function()
+        if state.cancelled then return end
+        cleanup(true)
+    end)
+
+    state.handle = handle
+    M._current = state
+
+    return handle
+end
+
+
+function M.stop_all()
+    for _, a in ipairs(active) do a.done = true end
+    active = {}
+    stop_timer()
+end
+
+-- Devuelve true si el motor está inicializado (anim.init llamado).
+-- El TabbedPanel lo consulta antes de intentar animar.
+function M.is_ready()
+    return srv ~= nil
+end
+
+-- Cambia el FPS del motor. Si hay un timer corriendo, lo reinicia
+-- con el nuevo intervalo. Útil para animaciones que quieren un FPS
+-- distinto (por ejemplo, crossfades a 20 FPS para reducir coste).
+function M.set_fps(n)
+    FPS = n
+    FRAME_MS = math.max(1, math.floor(1000 / n))
+    if timer then
+        timer:cancel()
+        timer = nil
+        if #active > 0 then
+            ensure_timer()
+        end
+    end
+end
+return M

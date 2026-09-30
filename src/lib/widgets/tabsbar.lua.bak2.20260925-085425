@@ -1,0 +1,299 @@
+-- TabsBar: barra de tabs. Soporta dos modos:
+--   compact = false (default): icono ARRIBA, texto ABAJO. Tabs
+--     principales del panel. pad_x=10, pad_y=6, icon_size=22.
+--   compact = true: icono y texto lado a lado. Sub-tabs.
+--     pad_x=8, pad_y=2, icon_size=16.
+--
+-- Colores: activo bg=accent fg=bg_normal; inactivo bg=bg_normal
+-- fg=muted. Los iconos se tiran con el color fg correspondiente
+-- (via draw_surface_tinted).
+
+local Area  = require("lib.area")
+local cairo = require("lib.cairo")
+local pango = require("lib.pango")
+local G     = require("lib.helpers.graphics")
+local log   = require("lib.log")
+
+local TabsBar = setmetatable({}, { __index = Area })
+TabsBar.__index = TabsBar
+
+-- Base de iconos: PNG convertidos con convert-icons.sh (prefijo tab-)
+local ICON_BASE = (os.getenv("HOME") or "") .. "/proyectos/lanetk/icons-png/32"
+
+local function icon_path(name)
+    if not name or name == "" then return nil end
+    -- Acepta "home" o "tab-home". Añade prefijo tab- si no está.
+    if name:sub(1, 4) == "tab-" then
+        return ICON_BASE .. "/" .. name .. ".png"
+    end
+    return ICON_BASE .. "/tab-" .. name .. ".png"
+end
+
+-- Cache de surfaces por path
+local surface_cache = {}
+local function get_surface(path)
+    if not path then return nil end
+    local s = surface_cache[path]
+    if s ~= nil then return s or nil end
+    local f = io.open(path, "rb")
+    if not f then
+        surface_cache[path] = false
+        return nil
+    end
+    f:close()
+    local surface = cairo.load_png_cached(path)
+    surface_cache[path] = surface or false
+    return surface
+end
+
+-- Utilidad local: color como tabla {r,g,b} a partir de cualquier
+-- tipo (tabla o hex string)
+local function to_rgb(c)
+    if type(c) == "table" then return c[1], c[2], c[3] end
+    if type(c) == "string" then
+        local r, g, b = G.hex_to_rgba(c)
+        return r, g, b
+    end
+    return 0.5, 0.5, 0.5
+end
+
+function TabsBar.new(opts)
+    opts = opts or {}
+    local self = setmetatable(Area.new(opts), TabsBar)
+    self._hover_visual  = true
+    self._pressed_visual = true
+
+    local T = opts.theme or {}
+    self.T = T
+    self.compact = opts.compact or false
+
+    -- Parametros segun modo
+    if self.compact then
+        self.pad_x     = opts.pad_x     or 8
+        self.pad_y     = opts.pad_y     or 2
+        self.icon_size = opts.icon_size or 16
+        self.gap       = opts.gap       or 2
+        self.icon_text_gap = 6
+    else
+        self.pad_x     = opts.pad_x     or 10
+        self.pad_y     = opts.pad_y     or 6
+        self.icon_size = opts.icon_size or 22
+        self.gap       = opts.gap       or 2
+        self.icon_text_gap = 2
+    end
+
+    self.font = opts.font or (T.font or "DejaVu Sans 10")
+    self.radius = opts.radius or 4
+
+    -- Colores (con fallbacks)
+    self.color_active_bg = opts.color_active_bg or T.accent    or "#d79921"
+    self.color_active_fg = opts.color_active_fg or T.bg_rgb    or { 0, 0, 0 }
+    self.color_inactive_bg = opts.color_inactive_bg or T.bg_rgb or { 0.07, 0.07, 0.07 }
+    self.color_inactive_fg = opts.color_inactive_fg or T.muted_rgb or { 0.55, 0.55, 0.55 }
+
+    self.on_select = opts.on_select
+
+    self.items = {}
+    self.by_id = {}
+    self.active = nil
+    self.hover_id = nil
+
+    for _, it in ipairs(opts.items or {}) do
+        self:add(it.id, it.label, it.icon)
+    end
+    if opts.active then
+        self.active = opts.active
+    elseif #self.items > 0 then
+        self.active = self.items[1].id
+    end
+
+    return self
+end
+
+function TabsBar:add(id, label, icon_name)
+    local path = icon_path(icon_name)
+    local has_icon = path ~= nil and get_surface(path) ~= nil
+
+    local tw, th = pango.measure(label, self.font)
+    local item = {
+        id = id,
+        label = label,
+        icon = icon_name,
+        icon_path = has_icon and path or nil,
+        text_w = tw, text_h = th,
+        w = 0, h = 0,
+        x0 = 0, y0 = 0, x1 = 0, y1 = 0,
+    }
+
+    -- Calcular ancho/alto segun layout
+    if self.compact then
+        -- icono + gap + texto en horizontal
+        local iw = has_icon and (self.icon_size + self.icon_text_gap) or 0
+        item.w = self.pad_x * 2 + iw + tw
+        item.h = self.pad_y * 2 + math.max(th, has_icon and self.icon_size or 0)
+    else
+        -- icono arriba, texto abajo
+        local ih = has_icon and (self.icon_size + self.icon_text_gap) or 0
+        item.w = self.pad_x * 2 + math.max(tw, has_icon and self.icon_size or 0)
+        item.h = self.pad_y * 2 + ih + th
+    end
+
+    self.items[#self.items + 1] = item
+    self.by_id[id] = item
+    return item
+end
+
+function TabsBar:set_active(id)
+    if not self.by_id[id] then return end
+    if self.active == id then return end
+    self.active = id
+    self:damage()
+    if self.on_select then self.on_select(id) end
+end
+
+function TabsBar:get_active() return self.active end
+
+function TabsBar:_total_width()
+    local w = 0
+    for i, item in ipairs(self.items) do
+        w = w + item.w
+        if i < #self.items then w = w + self.gap end
+    end
+    return w
+end
+
+function TabsBar:_row_height()
+    local h = 0
+    for _, item in ipairs(self.items) do
+        if item.h > h then h = item.h end
+    end
+    return h
+end
+
+function TabsBar:askMinMax(minw, minh, maxw, maxh)
+    local w = self:_total_width()
+    local h = self:_row_height()
+    return minw + w, minh + h, maxw + w, maxh + h
+end
+
+function TabsBar:layout(x0, y0, x1, y1)
+    Area.layout(self, x0, y0, x1, y1)
+    local h = self:_row_height()
+    local x = x0
+    for i, item in ipairs(self.items) do
+        item.x0 = x
+        item.y0 = y0
+        item.x1 = x + item.w
+        item.y1 = y0 + h
+        x = x + item.w + self.gap
+    end
+end
+
+-- Dibuja UN item completo (fondo + icono + texto) con los colores
+-- del estado dado.
+function TabsBar:_draw_item(cr, item, bg_rgb, fg_rgb)
+    local br, bg_, bb = to_rgb(bg_rgb)
+    local fr, fg_, fb = to_rgb(fg_rgb)
+
+    -- Fondo
+    cairo.set_rgb(cr, br, bg_, bb)
+    cairo.rounded_rect(cr, item.x0, item.y0,
+        item.w, item.h, self.radius)
+    cairo.fill(cr)
+
+    -- Icono
+    local icon_w = 0
+    local icon_h = 0
+    if item.icon_path then
+        local surface = get_surface(item.icon_path)
+        if surface then
+            local isz = self.icon_size
+            if self.compact then
+                local ix = item.x0 + self.pad_x
+                local iy = item.y0 + (item.h - isz) / 2
+                cairo.draw_surface_tinted(cr, surface,
+                    ix, iy, isz, isz, fr, fg_, fb)
+                icon_w = isz + self.icon_text_gap
+            else
+                local ix = item.x0 + (item.w - isz) / 2
+                local iy = item.y0 + self.pad_y
+                cairo.draw_surface_tinted(cr, surface,
+                    ix, iy, isz, isz, fr, fg_, fb)
+                icon_h = isz + self.icon_text_gap
+            end
+        end
+    end
+
+    -- Texto
+    if self.compact then
+        local tx = item.x0 + self.pad_x + icon_w
+        local ty = item.y0 + (item.h - item.text_h) / 2
+        pango.draw_text(cr, tx, ty, item.label, self.font,
+            { r = fr, g = fg_, b = fb })
+    else
+        local tx = item.x0 + (item.w - item.text_w) / 2
+        local ty = item.y0 + self.pad_y + icon_h
+        pango.draw_text(cr, tx, ty, item.label, self.font,
+            { r = fr, g = fg_, b = fb })
+    end
+end
+
+        local is_active = (item.id == self.active)
+        local is_hover  = (item.id == self.hover_id)
+
+        if is_active then
+            self:_draw_item(cr, item,
+                self.color_active_bg, self.color_active_fg)
+        elseif is_hover then
+            -- Hover: un tono intermedio
+            local fr, fg_, fb = to_rgb(self.color_inactive_fg)
+            -- fg ligeramente mas claro
+            local hover_fg = { math.min(1, fr + 0.2),
+                               math.min(1, fg_ + 0.2),
+                               math.min(1, fb + 0.2) }
+            self:_draw_item(cr, item, self.color_inactive_bg, hover_fg)
+        else
+            self:_draw_item(cr, item,
+                self.color_inactive_bg, self.color_inactive_fg)
+        end
+    end
+end
+
+function TabsBar:_hit_item(mx, my)
+    local gx = mx + self.x0
+    local gy = my + self.y0
+    for _, item in ipairs(self.items) do
+        if gx >= item.x0 and gx < item.x1
+           and gy >= item.y0 and gy < item.y1 then
+            return item
+        end
+    end
+    return nil
+end
+
+function TabsBar:on_mouse_move(mx, my)
+    local item = self:_hit_item(mx, my)
+    local new_hover = item and item.id or nil
+    if new_hover ~= self.hover_id then
+        self.hover_id = new_hover
+        self:damage()
+    end
+end
+
+function TabsBar:set_hover(v)
+    Area.set_hover(self, v)
+    if not v and self.hover_id then
+        self.hover_id = nil
+        self:damage()
+    end
+end
+
+function TabsBar:on_mouse_press(mx, my, button)
+    if button ~= 1 then return end
+    local item = self:_hit_item(mx, my)
+    if item then
+        self:set_active(item.id)
+    end
+end
+
+return TabsBar

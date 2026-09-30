@@ -1,0 +1,13 @@
+local M = {}
+M.cpu   = require("lib.data.cpu")
+M.ram   = require("lib.data.ram")
+M.gpu   = require("lib.data.gpu")
+M.temps = require("lib.data.temps")
+M.disk  = require("lib.data.disk")
+M.dispositivos = require("lib.data.dispositivos")
+M.notes = require("lib.data.notes")
+M.config = require("lib.data.config")
+M.inicio = require("lib.data.inicio")
+M.search = require("lib.data.search")
+M.bat   = require("lib.data.bat")
+return M

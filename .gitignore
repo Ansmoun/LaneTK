@@ -1,0 +1,18 @@
+# Documentacion: solo api.md y notes.md se publican
+/docs/README.md
+/docs/README-bar.md
+/docs/README-data.md
+/docs/README-helpers.md
+/docs/README-lib.md
+/docs/README-tabs.md
+/docs/README-widgets.md
+/docs/Apendice(E).txt
+/docs/pendientes.txt
+
+# Backups y temporales
+*.bak
+*.bak.*
+*.orig
+*.swp
+*.tmp
+.DS_Store

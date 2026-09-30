@@ -1,0 +1,49 @@
+-- Super panel de sistema: todos los tabs en un mismo panel.
+-- Trigger por archivo: echo toggle > /tmp/lanetk-panel.cmd
+
+local Server = require("lib.server")
+local theme  = require("lib.theme")
+local system = require("lib.system")
+local log    = require("lib.log")
+
+local srv = Server.new({ exit_on_empty = false })
+local mem = require("lib.mem")
+mem.attach(srv, "superpanel")
+local T = theme.load()
+log.info("superpanel", "paleta: %s", T.path)
+
+local app = system.new {
+    server = srv,
+    theme  = T,
+    trigger_path = "/tmp/lanetk-panel.cmd",
+    title  = "Panel de sistema",
+    -- Tamaño fijo, no porcentaje. Los porcentajes se calculan sobre
+    -- la pantalla virtual (1024x1368 con los dos monitores apilados),
+    -- y la ventana resultante (716x1026) no entra en ningun monitor
+    -- individual. Cairo falla al crear el surface (status 11). El
+    -- tamaño fijo entra en cualquier monitor.
+    width  = 900,
+    height = 560,
+    x      = "cursor-screen",
+    y      = "cursor-screen",
+}
+
+app:show()
+
+print("Super panel abierto.")
+print("")
+print("Navegacion:")
+print("  - Click en tabs arriba para cambiar")
+print("  - Tabs con sub-tabs (Inicio, Recursos, Red) tienen su propia barra")
+print("  - 'q' o Esc cierra el panel (el proceso sigue vivo)")
+print("")
+print("Trigger externo:")
+print("  echo toggle > /tmp/lanetk-panel.cmd    abre si cerrado, cierra si abierto")
+print("  echo show   > /tmp/lanetk-panel.cmd")
+print("  echo hide   > /tmp/lanetk-panel.cmd")
+print("  echo quit   > /tmp/lanetk-panel.cmd")
+print("")
+print("Ctrl+C en esta terminal termina el proceso.")
+
+srv:run()
+print("Adios.")

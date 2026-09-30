@@ -1,0 +1,35 @@
+local W = require("lib.widgets")
+local D = require("lib.data.config")
+
+local M = {}
+
+function M.new(srv, theme)
+    local tabs = {
+        { id = "inicio", label = "Inicio", icon = "home",
+          factory = function()
+              return require("lib.tabs.inicio").new(srv, theme)
+          end },
+        { id = "config", label = "Configuración", icon = "settings",
+          factory = function()
+              return require("lib.tabs.config").new(srv, theme)
+          end },
+    }
+
+    local A = D.get_anim_opts()
+
+    local tabbed = W.TabbedPanel.new {
+        tabs          = tabs,
+        theme         = theme,
+        compact       = true,
+        anim          = A.tabs,
+        anim_fps      = A.hz,
+        anim_duration = A.duration,
+    }
+    return {
+        widget = tabbed,
+        start = function() end,
+        stop  = function() tabbed:stop() end,
+    }
+end
+
+return M
