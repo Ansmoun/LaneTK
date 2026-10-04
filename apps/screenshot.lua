@@ -25,6 +25,7 @@ local xcb    = require("lib.xcb")
 local log    = require("lib.log")
 local W      = require("lib.widgets")
 local Area   = require("lib.area")
+local xanim  = require("lib.xshape_anim")
 
 local TRIGGER   = "/tmp/lanetk-screenshot.cmd"
 local HOME      = os.getenv("HOME")
@@ -58,6 +59,22 @@ local rec_timer = nil
 local prev_win = nil
 local prev_timer = nil
 local adv_win = nil
+local panel_handle = nil
+local adv_handle   = nil
+local prev_handle  = nil
+
+-- ── Helpers del reveal ────────────────────────────────────────────
+local function blit_and_attach(win, w, h, radius)
+    if win.cr and win.image_surface then
+        cairo.save(win.cr)
+        cairo.set_operator(win.cr, cairo.OPERATOR.SOURCE)
+        cairo.set_source_surface(win.cr, win.image_surface, 0, 0)
+        cairo.paint(win.cr)
+        cairo.restore(win.cr)
+        cairo.flush_surface(win.surface)
+    end
+    return xanim.attach { srv = srv, win = win, w = w, h = h, radius = radius }
+end
 
 -- ── CONF ──────────────────────────────────────────────────────────
 local function load_conf()
@@ -125,7 +142,12 @@ end
 
 local function close_preview()
     if prev_timer then prev_timer:cancel(); prev_timer = nil end
-    if prev_win then prev_win:close("preview"); prev_win = nil end
+    if not prev_handle or not prev_handle:visible() then return end
+    xcb.ungrab_pointer(srv.conn)
+    if prev_win and not prev_win.destroyed then
+        pcall(function() prev_win:restore_input_focus() end)
+    end
+    prev_handle:hide()
     if state == "done" then state = "idle" end
 end
 
@@ -187,17 +209,11 @@ local function show_preview(path, kind)
 
     local title_text = (kind == "foto") and "Foto lista" or "Video terminado"
 
-    -- ── Botones ────────────────────────────────────────────────────
     local function make_btn(label, cb)
         return W.Button.new {
-            text = label,
-            font = "DejaVu Sans 10",
-            flat = true,
-            padding_x = 8,
-            padding_y = 8,
-            corner_radius = 6,
-            color_hover = T.bg_focus_rgb,
-            color_text = T.fg_rgb,
+            text = label, font = "DejaVu Sans 10", flat = true,
+            padding_x = 8, padding_y = 8, corner_radius = 6,
+            color_hover = T.bg_focus_rgb, color_text = T.fg_rgb,
             on_click = cb,
         }
     end
@@ -208,23 +224,20 @@ local function show_preview(path, kind)
               or "—"))
 
     local info_lbl = W.Text.new {
-        text = info_text,
-        font = "DejaVu Sans 10",
+        text = info_text, font = "DejaVu Sans 10",
         align = "center", valign = "center",
         r = T.muted_rgb[1], g = T.muted_rgb[2], b = T.muted_rgb[3],
     }
 
     local btn_row = W.Group.new {
-        orientation = "horizontal",
-        spacing = 4,
+        orientation = "horizontal", spacing = 4,
         children = {
             { widget = make_btn("Abrir", function()
                 os.execute("(xdg-open '" .. path .. "') >/dev/null 2>&1 &")
                 close_preview()
             end), weight = 1 },
             { widget = make_btn("Copiar", function()
-                os.execute("printf '%s' '" .. path ..
-                    "' | xclip -selection clipboard")
+                os.execute("printf '%s' '" .. path .. "' | xclip -selection clipboard")
                 close_preview()
             end), weight = 1 },
             { widget = make_btn("Carpeta", function()
@@ -244,23 +257,18 @@ local function show_preview(path, kind)
     }
 
     local path_lbl = W.Text.new {
-        text = path,
-        font = "DejaVu Sans 9",
+        text = path, font = "DejaVu Sans 9",
         align = "center", valign = "center",
         r = T.muted_rgb[1], g = T.muted_rgb[2], b = T.muted_rgb[3],
     }
-
     local title_lbl = W.Text.new {
-        text = title_text,
-        font = "DejaVu Sans Bold 12",
+        text = title_text, font = "DejaVu Sans Bold 12",
         align = "center", valign = "center",
         r = T.fg_rgb[1], g = T.fg_rgb[2], b = T.fg_rgb[3],
     }
 
     local inner = W.Group.new {
-        orientation = "vertical",
-        spacing = 6,
-        padding = 12,
+        orientation = "vertical", spacing = 6, padding = 12,
         children = {
             { widget = title_lbl,                     weight = 0 },
             { widget = PreviewArea.new(thumb_surface), weight = 0 },
@@ -270,56 +278,63 @@ local function show_preview(path, kind)
         },
     }
 
-    local w
-    w = Window.new(srv, {
-        kind = "menu",
-        width = PREV_W, height = PREV_H,
-        x = "cursor-screen", y = "cursor-screen",
-        disable_q_close = true,
-        title = title_text,
-        on_draw = function(cr, cw, ch)
-            local bg = T.bg_rgb
-            local bcg = T.bg_card_rgb
-            cairo.set_rgb(cr, bg[1], bg[2], bg[3])
-            cairo.rounded_rect(cr, 0, 0, cw, ch, 12)
-            cairo.fill(cr)
-            cairo.set_rgb(cr, bcg[1], bcg[2], bcg[3])
-            cairo.rounded_rect(cr, 2, 2, cw - 4, ch - 4, 10)
-            cairo.fill(cr)
+    if not prev_win or prev_win.destroyed then
+        prev_win = Window.new(srv, {
+            kind = "menu",
+            width = PREV_W, height = PREV_H,
+            x = "cursor-screen", y = "cursor-screen",
+            disable_q_close = true,
+            title = title_text,
+            backing_store = 2,
+            on_draw = function(cr, cw, ch)
+                local bg = T.bg_rgb
+                local bcg = T.bg_card_rgb
+                cairo.set_rgb(cr, bg[1], bg[2], bg[3])
+                cairo.rounded_rect(cr, 0, 0, cw, ch, 12)
+                cairo.fill(cr)
+                cairo.set_rgb(cr, bcg[1], bcg[2], bcg[3])
+                cairo.rounded_rect(cr, 2, 2, cw - 4, ch - 4, 10)
+                cairo.fill(cr)
+            end,
+            on_key = function(key)
+                if key.pressed and key.name == "Escape"
+                   and not key.mods.ctrl and not key.mods.alt
+                   and not key.mods.super then
+                    close_preview()
+                end
+            end,
+            on_mouse = function(x, y, button)
+                if button ~= 1 then return end
+                if x < 0 or y < 0 or x >= PREV_W or y >= PREV_H then
+                    close_preview()
+                end
+            end,
+        })
+        prev_handle = blit_and_attach(prev_win, PREV_W, PREV_H, 12)
+    end
 
-        end,
-        on_key = function(key)
-            if key.pressed and key.name == "Escape"
-               and not key.mods.ctrl and not key.mods.alt
-               and not key.mods.super then
-                close_preview()
-            end
-        end,
-        on_mouse = function(x, y, button)
-            if button ~= 1 then return end
-            if x < 0 or y < 0 or x >= PREV_W or y >= PREV_H then
-                close_preview()
-            end
-        end,
-        on_close = function()
-            xcb.ungrab_pointer(srv.conn)
-            prev_win = nil
-            if state == "done" then state = "idle" end
-        end,
-    })
-    w:set_root(inner)
-    xcb.grab_pointer(srv.conn, w.id)
-    w:set_input_focus()
+    prev_win:set_root(inner)
+    prev_win:damage_all()
+    prev_win:draw()
+    if prev_win.cr and prev_win.image_surface then
+        cairo.save(prev_win.cr)
+        cairo.set_operator(prev_win.cr, cairo.OPERATOR.SOURCE)
+        cairo.set_source_surface(prev_win.cr, prev_win.image_surface, 0, 0)
+        cairo.paint(prev_win.cr)
+        cairo.restore(prev_win.cr)
+        cairo.flush_surface(prev_win.surface)
+    end
 
-    prev_win = w
+    prev_handle:reset()
+    prev_handle:show()
+    xcb.grab_pointer(srv.conn, prev_win.id)
+    prev_win:set_input_focus()
     state = "done"
 
-    -- Auto-cierre a los 15 s
     prev_timer = srv:add_timer(15000, function()
         if prev_timer then prev_timer:cancel(); prev_timer = nil end
         close_preview()
     end)
-
     log.info("screenshot", "preview: %s (%s)", path, kind)
 end
 
@@ -619,7 +634,12 @@ end
 local ADV_PRESETS = { "ultrafast", "veryfast", "medium", "slow" }
 
 local function close_advanced()
-    if adv_win then adv_win:close("adv"); adv_win = nil end
+    if not adv_handle or not adv_handle:visible() then return end
+    xcb.ungrab_pointer(srv.conn)
+    if adv_win and not adv_win.destroyed then
+        pcall(function() adv_win:restore_input_focus() end)
+    end
+    adv_handle:hide()
 end
 
 local function show_advanced_panel(conf, on_save)
@@ -756,53 +776,67 @@ local function show_advanced_panel(conf, on_save)
         },
     }
 
-    local w
-    w = Window.new(srv, {
-        kind = "menu",
-        width = ADV_W, height = ADV_H,
-        x = "cursor-screen", y = "cursor-screen",
-        disable_q_close = true,
-        title = "Avanzado",
-        on_draw = function(cr, cw, ch)
-            local bg  = T.bg_rgb
-            local bcg = T.bg_card_rgb
-            cairo.set_rgb(cr, bg[1], bg[2], bg[3])
-            cairo.rounded_rect(cr, 0, 0, cw, ch, 10)
-            cairo.fill(cr)
-            cairo.set_rgb(cr, bcg[1], bcg[2], bcg[3])
-            cairo.rounded_rect(cr, 2, 2, cw - 4, ch - 4, 8)
-            cairo.fill(cr)
-        end,
-        on_key = function(key)
-            if key.pressed and key.name == "Escape"
-               and not key.mods.ctrl and not key.mods.alt
-               and not key.mods.super then
-                close_advanced()
-            end
-        end,
-        on_mouse = function(x, y, button)
-            if button ~= 1 then return end
-            if x < 0 or y < 0 or x >= ADV_W or y >= ADV_H then
-                close_advanced()
-            end
-        end,
-        on_close = function()
-            xcb.ungrab_pointer(srv.conn)
-            adv_win = nil
-        end,
-    })
-    w:set_root(inner)
-    xcb.grab_pointer(srv.conn, w.id)
-    w:set_input_focus()
+    if not adv_win or adv_win.destroyed then
+        adv_win = Window.new(srv, {
+            kind = "menu",
+            width = ADV_W, height = ADV_H,
+            x = "cursor-screen", y = "cursor-screen",
+            disable_q_close = true,
+            title = "Avanzado",
+            backing_store = 2,
+            on_draw = function(cr, cw, ch)
+                local bg  = T.bg_rgb
+                local bcg = T.bg_card_rgb
+                cairo.set_rgb(cr, bg[1], bg[2], bg[3])
+                cairo.rounded_rect(cr, 0, 0, cw, ch, 10)
+                cairo.fill(cr)
+                cairo.set_rgb(cr, bcg[1], bcg[2], bcg[3])
+                cairo.rounded_rect(cr, 2, 2, cw - 4, ch - 4, 8)
+                cairo.fill(cr)
+            end,
+            on_key = function(key)
+                if key.pressed and key.name == "Escape"
+                   and not key.mods.ctrl and not key.mods.alt
+                   and not key.mods.super then
+                    close_advanced()
+                end
+            end,
+            on_mouse = function(x, y, button)
+                if button ~= 1 then return end
+                if x < 0 or y < 0 or x >= ADV_W or y >= ADV_H then
+                    close_advanced()
+                end
+            end,
+        })
+        adv_handle = blit_and_attach(adv_win, ADV_W, ADV_H, 10)
+    end
 
-    adv_win = w
+    adv_win:set_root(inner)
+    adv_win:damage_all()
+    adv_win:draw()
+    if adv_win.cr and adv_win.image_surface then
+        cairo.save(adv_win.cr)
+        cairo.set_operator(adv_win.cr, cairo.OPERATOR.SOURCE)
+        cairo.set_source_surface(adv_win.cr, adv_win.image_surface, 0, 0)
+        cairo.paint(adv_win.cr)
+        cairo.restore(adv_win.cr)
+        cairo.flush_surface(adv_win.surface)
+    end
+    adv_handle:reset()
+    adv_handle:show()
+    xcb.grab_pointer(srv.conn, adv_win.id)
+    adv_win:set_input_focus()
 end
 
 -- ── PANEL ─────────────────────────────────────────────────────────
 local function close_panel()
-    if panel_win then
-        panel_win:close("panel")
+    if not panel_handle or not panel_handle:visible() then return end
+    xcb.ungrab_pointer(srv.conn)
+    if panel_win and not panel_win.destroyed then
+        pcall(function() panel_win:restore_input_focus() end)
     end
+    panel_handle:hide()
+    if state == "panel" then state = "idle" end
 end
 
 local function open_panel()
@@ -853,48 +887,57 @@ local function open_panel()
         on_advanced = on_advanced,
     })
 
-    local w
-    w = Window.new(srv, {
-        kind = "menu",
-        width = PANEL_W, height = PANEL_H,
-        x = "cursor-screen", y = "cursor-screen",
-        disable_q_close = true,
-        title = "Screenshot",
-        on_draw = function(cr, cw, ch)
-            local bg = T.bg_rgb
-            local bcg = T.bg_card_rgb
-            cairo.set_rgb(cr, bg[1], bg[2], bg[3])
-            cairo.rounded_rect(cr, 0, 0, cw, ch, 12)
-            cairo.fill(cr)
-            cairo.set_rgb(cr, bcg[1], bcg[2], bcg[3])
-            cairo.rounded_rect(cr, 2, 2, cw - 4, ch - 4, 10)
-            cairo.fill(cr)
-        end,
-        on_key = function(key)
-            if key.pressed and key.name == "Escape"
-               and not key.mods.ctrl and not key.mods.alt
-               and not key.mods.super then
-                w:close("escape")
-            end
-        end,
-        on_mouse = function(x, y, button)
-            if button ~= 1 then return end
-            if x < 0 or y < 0 or x >= PANEL_W or y >= PANEL_H then
-                w:close("click fuera")
-            end
-        end,
-        on_close = function()
-            xcb.ungrab_pointer(srv.conn)
-            panel_win = nil
-            panel_tab = nil
-            if state == "panel" then state = "idle" end
-        end,
-    })
-    w:set_root(panel_tab.widget)
+    if not panel_win or panel_win.destroyed then
+        panel_win = Window.new(srv, {
+            kind = "menu",
+            width = PANEL_W, height = PANEL_H,
+            x = "cursor-screen", y = "cursor-screen",
+            disable_q_close = true,
+            title = "Screenshot",
+            backing_store = 2,
+            on_draw = function(cr, cw, ch)
+                local bg = T.bg_rgb
+                local bcg = T.bg_card_rgb
+                cairo.set_rgb(cr, bg[1], bg[2], bg[3])
+                cairo.rounded_rect(cr, 0, 0, cw, ch, 12)
+                cairo.fill(cr)
+                cairo.set_rgb(cr, bcg[1], bcg[2], bcg[3])
+                cairo.rounded_rect(cr, 2, 2, cw - 4, ch - 4, 10)
+                cairo.fill(cr)
+            end,
+            on_key = function(key)
+                if key.pressed and key.name == "Escape"
+                   and not key.mods.ctrl and not key.mods.alt
+                   and not key.mods.super then
+                    close_panel()
+                end
+            end,
+            on_mouse = function(x, y, button)
+                if button ~= 1 then return end
+                if x < 0 or y < 0 or x >= PANEL_W or y >= PANEL_H then
+                    close_panel()
+                end
+            end,
+        })
+        panel_handle = blit_and_attach(panel_win, PANEL_W, PANEL_H, 12)
+    end
+
+    panel_win:set_root(panel_tab.widget)
     if panel_tab.start then panel_tab.start() end
-    xcb.grab_pointer(srv.conn, w.id)
-    w:set_input_focus()
-    panel_win = w
+    panel_win:damage_all()
+    panel_win:draw()
+    if panel_win.cr and panel_win.image_surface then
+        cairo.save(panel_win.cr)
+        cairo.set_operator(panel_win.cr, cairo.OPERATOR.SOURCE)
+        cairo.set_source_surface(panel_win.cr, panel_win.image_surface, 0, 0)
+        cairo.paint(panel_win.cr)
+        cairo.restore(panel_win.cr)
+        cairo.flush_surface(panel_win.surface)
+    end
+    panel_handle:reset()
+    panel_handle:show()
+    xcb.grab_pointer(srv.conn, panel_win.id)
+    panel_win:set_input_focus()
     state = "panel"
 end
 
@@ -917,10 +960,28 @@ end
 --     puede reconstruir el archivo despues de grabado; se descarta).
 --   - En estado "recording": no tocar, la grabacion continua.
 --   - En estado "idle": no-op.
+local function destroy_all_windows()
+    if panel_win and not panel_win.destroyed then
+        xcb.destroy_window(srv.conn, panel_win.id)
+    end
+    if adv_win and not adv_win.destroyed then
+        xcb.destroy_window(srv.conn, adv_win.id)
+    end
+    if prev_win and not prev_win.destroyed then
+        xcb.destroy_window(srv.conn, prev_win.id)
+    end
+    panel_win, panel_handle = nil, nil
+    adv_win, adv_handle = nil, nil
+    prev_win, prev_handle = nil, nil
+    panel_tab = nil
+    state = "idle"
+end
+
 theme.watch(function()
     if state == "panel" then
         log.info("screenshot", "rebuild del panel por cambio de paleta")
-        close_panel()
+        xcb.ungrab_pointer(srv.conn)
+        destroy_all_windows()
         local tm
         tm = srv:add_timer(80, function()
             tm:cancel()
@@ -928,7 +989,8 @@ theme.watch(function()
         end)
     elseif state == "done" then
         log.info("screenshot", "preview cerrada por cambio de paleta")
-        close_preview()
+        xcb.ungrab_pointer(srv.conn)
+        destroy_all_windows()
     end
 end)
 
@@ -937,14 +999,16 @@ reload.install(srv, function()
     log.info("screenshot", "SIGUSR1: rebuild cross-process")
     theme.reload_in_place(T)
     if state == "panel" then
-        close_panel()
+        xcb.ungrab_pointer(srv.conn)
+        destroy_all_windows()
         local tm
         tm = srv:add_timer(80, function()
             tm:cancel()
             open_panel()
         end)
     elseif state == "done" then
-        close_preview()
+        xcb.ungrab_pointer(srv.conn)
+        destroy_all_windows()
     end
 end)
 
@@ -959,10 +1023,8 @@ srv:watch_trigger(TRIGGER, function(cmd)
     elseif cmd == "stop" then
         if state == "recording" then stop_recording() end
     elseif cmd == "quit" then
-        if panel_win then panel_win:close("quit") end
         if rec_win then rec_win:close("quit") end
-        if prev_win then prev_win:close("quit") end
-        if adv_win then adv_win:close("quit") end
+        destroy_all_windows()
         srv:stop()
     else
         log.warn("screenshot", "cmd desconocido: %s", cmd)
