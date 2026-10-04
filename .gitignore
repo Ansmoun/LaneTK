@@ -1,3 +1,15 @@
+# Backups y temporales
+*.bak
+*.bak-*
+*.bak.*
+*.orig
+*.swp
+*.tmp
+.DS_Store
+
+# Snapshots de sesiones anteriores
+.backups/
+
 # Documentacion: solo api.md y notes.md se publican
 /docs/README.md
 /docs/README-bar.md
@@ -9,10 +21,5 @@
 /docs/Apendice(E).txt
 /docs/pendientes.txt
 
-# Backups y temporales
-*.bak
-*.bak.*
-*.orig
-*.swp
-*.tmp
-.DS_Store
+# Archivo accidental
+80%,
