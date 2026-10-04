@@ -9,8 +9,8 @@
 --   height    = <px> | "screen" | "N%" | nil (default: segun
 --               position)
 --   margin    = { top, right, bottom, left } (px)
---   x, y      = <px> | "center" | "start" | "end" | "N%" (solo
---               para position = "free")
+--   x, y      = <px> | "center" | "start" | "end" | "N%" (opcional,
+--               "free" y "bottom" usan x; "top" y "bottom" usan y solo en "free")
 --
 -- Devuelve { x, y, w, h, position }.
 
@@ -62,7 +62,7 @@ function M.compute(spec, mon)
     elseif position == "bottom" then
         w = dim(spec.width or "screen", mon.w)
         h = dim(spec.height, mon.h) or 24
-        x = mon.x + ml
+        x = mon.x + pos(spec.x, mon.w, w)
         y = mon.y + mon.h - h - mb
 
     elseif position == "left" then
