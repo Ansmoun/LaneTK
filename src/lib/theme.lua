@@ -46,17 +46,25 @@ end
 -- Localiza la carpeta palettes/ subiendo desde el directorio de
 -- este archivo.
 local function find_palette_dir()
+    -- 1. CWD: <cwd>/palettes/. Es lo que quiere un consumidor como LANE,
+    --    que arranca con cd a su raiz. Desacopla el toolkit de donde
+    --    viven las paletas del entorno.
+    if dir_exists("palettes") then return "palettes" end
+
+    -- 2. Env var generica, para consumidores que no controlan el CWD.
+    local env = os.getenv("THEME_PALETTES_DIR")
+    if env and dir_exists(env) then return env end
+
+    -- 3. Fallback historico: subir desde el propio theme.lua.
     local src = debug.getinfo(1, "S").source or ""
     src = src:gsub("^@", "")
     local dir = src:match("^(.*)/[^/]+$") or "."
-    -- Probar dir/palettes, dir/../palettes, dir/../../palettes, ...
     local probe = dir
     for _ = 1, 6 do
         local cand = probe .. "/palettes"
         if dir_exists(cand) then return cand end
         probe = probe .. "/.."
     end
-    -- Fallback
     return dir .. "/palettes"
 end
 
