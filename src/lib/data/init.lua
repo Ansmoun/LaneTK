@@ -10,4 +10,6 @@ M.config = require("lib.data.config")
 M.inicio = require("lib.data.inicio")
 M.search = require("lib.data.search")
 M.bat   = require("lib.data.bat")
+M.brightness = require("lib.data.brightness")
+M.volume     = require("lib.data.volume")
 return M

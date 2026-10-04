@@ -21,6 +21,7 @@ local function atoms_for(conn)
         _NET_WM_WINDOW_TYPE_DOCK     = xcb.intern_atom(conn, "_NET_WM_WINDOW_TYPE_DOCK"),
         _NET_WM_WINDOW_TYPE_DIALOG   = xcb.intern_atom(conn, "_NET_WM_WINDOW_TYPE_DIALOG"),
         _NET_WM_WINDOW_TYPE_MENU     = xcb.intern_atom(conn, "_NET_WM_WINDOW_TYPE_MENU"),
+        _NET_WM_WINDOW_TYPE_DESKTOP  = xcb.intern_atom(conn, "_NET_WM_WINDOW_TYPE_DESKTOP"),
         _NET_WM_STRUT                = xcb.intern_atom(conn, "_NET_WM_STRUT"),
         _NET_WM_STRUT_PARTIAL        = xcb.intern_atom(conn, "_NET_WM_STRUT_PARTIAL"),
         UTF8_STRING                  = xcb.intern_atom(conn, "UTF8_STRING"),

@@ -402,6 +402,93 @@ typedef struct {
     uint32_t     data[5];
 } xcb_client_message_event_t;
 
+typedef uint32_t xcb_pixmap_t;
+typedef uint32_t xcb_gcontext_t;
+
+/* --- Pixmap, GC, PutImage (para el wallpaper nativo) --- */
+xcb_void_cookie_t xcb_create_pixmap(
+    xcb_connection_t *c, uint8_t depth, xcb_pixmap_t pid,
+    xcb_drawable_t drawable, uint16_t width, uint16_t height);
+xcb_void_cookie_t xcb_create_pixmap_checked(
+    xcb_connection_t *c, uint8_t depth, xcb_pixmap_t pid,
+    xcb_drawable_t drawable, uint16_t width, uint16_t height);
+xcb_void_cookie_t xcb_free_pixmap(xcb_connection_t *c, xcb_pixmap_t pixmap);
+xcb_void_cookie_t xcb_free_pixmap_checked(xcb_connection_t *c, xcb_pixmap_t pixmap);
+xcb_void_cookie_t xcb_create_gc(
+    xcb_connection_t *c, xcb_gcontext_t cid, xcb_drawable_t drawable,
+    uint32_t value_mask, const uint32_t *value_list);
+xcb_void_cookie_t xcb_create_gc_checked(
+    xcb_connection_t *c, xcb_gcontext_t cid, xcb_drawable_t drawable,
+    uint32_t value_mask, const uint32_t *value_list);
+xcb_void_cookie_t xcb_free_gc(xcb_connection_t *c, xcb_gcontext_t gc);
+xcb_void_cookie_t xcb_free_gc_checked(xcb_connection_t *c, xcb_gcontext_t gc);
+xcb_void_cookie_t xcb_put_image(
+    xcb_connection_t *c, uint8_t format, xcb_drawable_t drawable,
+    xcb_gcontext_t gc, uint16_t width, uint16_t height,
+    int16_t dst_x, int16_t dst_y, uint8_t left_pad, uint8_t depth,
+    uint32_t data_len, const uint8_t *data);
+xcb_void_cookie_t xcb_put_image_checked(
+    xcb_connection_t *c, uint8_t format, xcb_drawable_t drawable,
+    xcb_gcontext_t gc, uint16_t width, uint16_t height,
+    int16_t dst_x, int16_t dst_y, uint8_t left_pad, uint8_t depth,
+    uint32_t data_len, const uint8_t *data);
+
+
+/* --- XShape: mascara de recorte para ventanas no rectangulares --- */
+typedef struct {
+    int16_t  x;
+    int16_t  y;
+    uint16_t width;
+    uint16_t height;
+} xcb_rectangle_t;
+
+uint32_t xcb_shape_rectangles(
+    xcb_connection_t *c,
+    uint8_t operation,
+    uint8_t destination_kind,
+    uint8_t ordering,
+    xcb_window_t destination_window,
+    int16_t x_offset,
+    int16_t y_offset,
+    uint32_t rectangles_len,
+    const xcb_rectangle_t *rectangles);
+
+typedef struct {
+    uint8_t  response_type;
+    uint8_t  pad0;
+    uint16_t sequence;
+    uint32_t length;
+    uint8_t  keys[32];
+} xcb_query_keymap_reply_t;
+
+uint32_t xcb_query_keymap(xcb_connection_t *c);
+xcb_query_keymap_reply_t *xcb_query_keymap_reply(
+    xcb_connection_t *c, uint32_t cookie, void *e);
+
+uint32_t xcb_shape_mask(
+    xcb_connection_t *c, uint8_t operation, uint8_t destination_kind,
+    xcb_window_t destination_window,
+    int16_t x_offset, int16_t y_offset, xcb_pixmap_t source_bitmap);
+
+uint32_t xcb_shape_combine(
+    xcb_connection_t *c, uint8_t operation,
+    uint8_t destination_kind, uint8_t source_kind,
+    xcb_window_t destination_window,
+    int16_t x_offset, int16_t y_offset,
+    xcb_window_t source_window);
+
+uint32_t xcb_shape_offset(
+    xcb_connection_t *c, uint8_t destination_kind,
+    xcb_window_t destination_window,
+    int16_t x_offset, int16_t y_offset);
+
+typedef long time_t;
+typedef long suseconds_t;
+struct timeval {
+    time_t       tv_sec;
+    suseconds_t  tv_usec;
+};
+int gettimeofday(struct timeval *tv, void *tz);
 ]]
 
 return ffi

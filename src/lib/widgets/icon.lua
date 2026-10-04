@@ -34,8 +34,15 @@ function Icon.new(opts)
     end
 
     self.surface, self.err = nil, nil
-    if self.path then
-        self.surface, self.err = cairo.load_png_cached(self.path)
+    if opts.surface then
+        self.surface = opts.surface
+    elseif self.path then
+        if self.path:sub(-4):lower() == ".svg" then
+            self.surface, self.err = require("lib.svg").load(
+                self.path, opts.width, opts.height)
+        else
+            self.surface, self.err = cairo.load_png_cached(self.path)
+        end
     end
 
     if self.surface then
@@ -59,7 +66,12 @@ end
 function Icon:set_path(path)
     self.path = path
     if path then
-        self.surface, self.err = cairo.load_png_cached(path)
+        if path:sub(-4):lower() == ".svg" then
+            self.surface, self.err = require("lib.svg").load(
+                path, self.width, self.height)
+        else
+            self.surface, self.err = cairo.load_png_cached(path)
+        end
         if self.surface then
             self.native_w = cairo.surface_width(self.surface)
             self.native_h = cairo.surface_height(self.surface)

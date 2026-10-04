@@ -23,6 +23,14 @@ M.OPERATOR = {
     MULTIPLY = 14,
 }
 
+M.FILTER = {
+    FAST     = 0,
+    GOOD     = 1,
+    BEST     = 2,
+    NEAREST  = 3,
+    BILINEAR = 4,
+}
+
 M.FORMAT = {
     ARGB32 = 0,
     RGB24  = 1,
@@ -106,6 +114,11 @@ function M.clip(cr)            cairo_lib.cairo_clip(cr) end
 function M.clip_preserve(cr)   cairo_lib.cairo_clip_preserve(cr) end
 function M.new_path(cr)        cairo_lib.cairo_new_path(cr) end
 
+function M.set_filter(cr, filter)
+    cairo_lib.cairo_pattern_set_filter(
+        cairo_lib.cairo_get_source(cr), filter)
+end
+
 function M.set_source_surface(cr, surface, x, y)
     cairo_lib.cairo_set_source_surface(cr, surface, x, y)
 end
@@ -137,7 +150,7 @@ end
 
 -- Dibuja un surface en (x, y) con un tamano destino (w, h).
 -- Si w/h son nil, usa el tamano nativo de la imagen.
-function M.draw_surface(cr, surface, x, y, w, h)
+function M.draw_surface(cr, surface, x, y, w, h, filter)
     if w == nil then w = M.surface_width(surface) end
     if h == nil then h = M.surface_height(surface) end
     local nw = M.surface_width(surface)
@@ -148,7 +161,10 @@ function M.draw_surface(cr, surface, x, y, w, h)
     cairo_lib.cairo_translate(cr, x, y)
     cairo_lib.cairo_scale(cr, w / nw, h / nh)
     cairo_lib.cairo_set_source_surface(cr, surface, 0, 0)
-    -- Filtrar con GOOD por defecto para escalados limpios
+    if filter then
+        cairo_lib.cairo_pattern_set_filter(
+            cairo_lib.cairo_get_source(cr), filter)
+    end
     cairo_lib.cairo_paint(cr)
     cairo_lib.cairo_restore(cr)
 end

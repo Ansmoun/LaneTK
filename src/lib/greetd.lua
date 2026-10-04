@@ -29,6 +29,7 @@
 -- antes de lanzar el greeter.
 
 local ffi = require("bindings.cdef.net")
+local bit = require("bit")
 local json = require("lib.helpers.json")
 local log = require("lib.log")
 
@@ -48,21 +49,42 @@ Client.__index = Client
 -- Lee una linea completa del socket (hasta \n inclusive).
 -- Devuelve (linea_sin_\n) o (nil, err).
 function Client:_read_line()
-    local buf = {}
-    local byte = ffi.new("char[1]")
-    while true do
-        local n = ffi.C.recv(self.fd, byte, 1, 0)
+    -- Lee 4 bytes de longitud (uint32 LE) + payload JSON.
+    local hdr = ffi.new("uint8_t[4]")
+    local got = 0
+    while got < 4 do
+        local n = ffi.C.recv(self.fd, hdr + got, 4 - got, 0)
         if n == 0 then
+            log.warn("greetd", "recv EOF: greetd cerro la conexion")
             return nil, "EOF del socket"
         elseif n < 0 then
-            return nil, "recv fallo"
+            return nil, "recv fallo (header)"
         end
-        local b = byte[0]
-        if b == 10 then  -- '\n'
-            return table.concat(buf)
-        end
-        buf[#buf + 1] = ffi.string(byte, 1)
+        got = got + tonumber(n)
     end
+    local payload_len = bit.bor(
+        bit.lshift(tonumber(hdr[3]), 24),
+        bit.lshift(tonumber(hdr[2]), 16),
+        bit.lshift(tonumber(hdr[1]), 8),
+        tonumber(hdr[0]))
+    if payload_len < 1 or payload_len > 1024 * 1024 then
+        return nil, "payload_len fuera de rango: " .. tostring(payload_len)
+    end
+    local buf = ffi.new("uint8_t[?]", payload_len)
+    local got2 = 0
+    while got2 < payload_len do
+        local n = ffi.C.recv(self.fd, buf + got2, payload_len - got2, 0)
+        if n == 0 then
+            log.warn("greetd", "recv EOF a mitad del payload (%d/%d)", got2, payload_len)
+            return nil, "EOF del socket"
+        elseif n < 0 then
+            return nil, "recv fallo (payload)"
+        end
+        got2 = got2 + tonumber(n)
+    end
+    local result = ffi.string(buf, payload_len)
+    log.debug("greetd", "RECV(%d): %s", payload_len, result)
+    return result
 end
 
 function Client:_send(tbl)
@@ -71,9 +93,16 @@ function Client:_send(tbl)
         log.error("greetd", "encode fallo: %s", tostring(err))
         return false, err
     end
-    -- greetd espera el mensaje con \n de terminador.
-    s = s .. "\n"
-    local n = ffi.C.send(self.fd, s, #s, 0)
+    -- Protocolo greetd: <32-bit length LE> <JSON>  (sin \n).
+    local payload_len = #s
+    local buf = ffi.new("uint8_t[?]", 4 + payload_len)
+    buf[0] = bit.band(payload_len, 0xff)
+    buf[1] = bit.band(bit.rshift(payload_len, 8), 0xff)
+    buf[2] = bit.band(bit.rshift(payload_len, 16), 0xff)
+    buf[3] = bit.band(bit.rshift(payload_len, 24), 0xff)
+    ffi.copy(buf + 4, s, payload_len)
+    log.debug("greetd", "SEND(%d): %s", payload_len, s)
+    local n = ffi.C.send(self.fd, buf, 4 + payload_len, 0)
     if n < 0 then
         return false, "send fallo"
     end

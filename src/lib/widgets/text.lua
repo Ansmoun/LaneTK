@@ -34,13 +34,21 @@ function Text:_remeasure()
     local plain = self.markup
         and self.markup:gsub("<[^>]+>", "")
         or  self.text
+    local old_w, old_h = self.text_w, self.text_h
     self.text_w, self.text_h = pango.measure(plain, self.font)
     self.min_w, self.min_h = self.text_w, self.text_h
-    -- Puede crecer en ambos ejes. El texto se dibuja con valign
-    -- dentro del rect asignado. Esto permite centrarlo en cards
-    -- o llenar el espacio disponible.
     self.max_w = 10000
     self.max_h = 10000
+    -- Si el tamano del texto cambio, invalidar el layout del padre
+    -- para que recalcule el minimo de este widget en el grupo.
+    if old_w ~= self.text_w or old_h ~= self.text_h then
+        local par = self.parent
+        if par and par.invalidate_layout then
+            par:invalidate_layout()
+        elseif self.window and self.window.damage_all then
+            self.window:damage_all()
+        end
+    end
 end
 
 function Text:set_text(text)

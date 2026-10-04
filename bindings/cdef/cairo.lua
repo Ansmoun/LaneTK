@@ -9,7 +9,6 @@ typedef int cairo_format_t;
 
 typedef struct _cairo cairo_t;
 typedef struct _cairo_surface cairo_surface_t;
-typedef struct _cairo_pattern cairo_pattern_t;
 
 enum {
     CAIRO_FORMAT_INVALID   = -1,
@@ -29,6 +28,8 @@ cairo_surface_t *cairo_xcb_surface_create(
     int               height
 );
 
+
+typedef struct _cairo_pattern cairo_pattern_t;
 cairo_surface_t *cairo_image_surface_create(int format, int width, int height);
 
 cairo_status_t cairo_surface_status(cairo_surface_t *surface);
@@ -51,7 +52,6 @@ void cairo_mask(cairo_t *cr, cairo_pattern_t *pattern);
 void cairo_mask_surface(cairo_t *cr, cairo_surface_t *surface, double surface_x, double surface_y);
 void cairo_scale(cairo_t *cr, double sx, double sy);
 cairo_pattern_t *cairo_pattern_create_for_surface(cairo_surface_t *surface);
-void cairo_pattern_set_filter(cairo_pattern_t *pattern, int filter);
 void cairo_pattern_destroy(cairo_pattern_t *pattern);
 int cairo_surface_get_type(cairo_surface_t *surface);
 int cairo_image_surface_get_width(cairo_surface_t *surface);
@@ -81,6 +81,8 @@ void cairo_fill(cairo_t *cr);
 void cairo_stroke(cairo_t *cr);
 void cairo_fill_preserve(cairo_t *cr);
 void cairo_stroke_preserve(cairo_t *cr);
+cairo_pattern_t *cairo_get_source(cairo_t *cr);
+void cairo_pattern_set_filter(cairo_pattern_t *pattern, int filter);
 ]]
 
 return ffi

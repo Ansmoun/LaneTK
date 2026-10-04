@@ -43,6 +43,7 @@ void pango_layout_get_pixel_size(PangoLayout *layout, int *width, int *height);
 int  pango_layout_get_baseline(PangoLayout *layout);
 
 void g_object_unref(void *object);
+
 ]]
 
 return ffi

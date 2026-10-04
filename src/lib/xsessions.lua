@@ -94,15 +94,22 @@ end
 -- para arrancar esa sesion. Por ahora asumimos que todas las
 -- sesiones de /usr/share/xsessions son X11 y hay que envolverlas con
 -- startx.
+-- Devuelve el comando que hay que pasarle a greetd en start_session.
+--
+-- IMPORTANTE: se devuelve `startx` a secas, SIN cliente explicito.
+-- `startx <cliente>` ignora ~/.xinitrc, lo que rompe la cadena
+-- ~/.xinitrc -> bin/lanetk-session -> ~/.config/lanetk/wm -> WM.
+-- Ademas, cuando greetd ya cambio de VT, un segundo `startx` que
+-- elige su propio VT pisa el VT activo y cuelga el sistema.
+--
+-- La eleccion del WM la persiste Lefty en ~/.config/lanetk/wm
+-- (o el consumidor de este modulo) ANTES de llamar start_session.
+-- startx -> xinit -> ~/.xinitrc -> bin/lanetk-session lo lee.
 function M.build_command(id)
-    -- Buscamos la sesion por id
+    -- Validamos que la sesion exista (por si el id es basura)
     for _, s in ipairs(M.list()) do
         if s.id == id then
-            -- Limpiar el Exec (sacar los % codes)
-            local exec = s.Exec:gsub("%%[uUfFdDnNickvm]", ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-            -- Armar el comando: startx /usr/bin/env <exec>
-            -- startx se encarga de levantar X + correr el exec
-            return { "startx", "/usr/bin/env", exec }
+            return { "startx" }
         end
     end
     return nil

@@ -269,6 +269,10 @@ function M.create_window(conn, opts)
     local mask = 0
     local values = {}
 
+    if opts.background_pixmap ~= nil then
+        mask = bit.bor(mask, M.CW.BackPixmap)
+        values[#values + 1] = opts.background_pixmap
+    end
     if opts.background_pixel ~= nil then
         mask = bit.bor(mask, M.CW.BackPixel)
         values[#values + 1] = opts.background_pixel
@@ -276,6 +280,10 @@ function M.create_window(conn, opts)
     if opts.border_pixel ~= nil then
         mask = bit.bor(mask, M.CW.BorderPixel)
         values[#values + 1] = opts.border_pixel
+    end
+    if opts.backing_store ~= nil then
+        mask = bit.bor(mask, M.CW.BackingStore)
+        values[#values + 1] = opts.backing_store
     end
     if opts.override_redirect then
         mask = bit.bor(mask, M.CW.OverrideRedirect)
@@ -448,6 +456,261 @@ end
 function M.ungrab_pointer(conn)
     xcb_core.xcb_ungrab_pointer(conn, 0)
     xcb_core.xcb_flush(conn)
+end
+
+
+-- =====================================================================
+-- Pixmap, GC y PutImage (para el wallpaper nativo)
+-- =====================================================================
+M.IMAGE_FORMAT = {
+    XYBitmap = 0,
+    XYPixmap = 1,
+    ZPixmap  = 2,
+}
+
+-- Crea un pixmap server-side. Devuelve el cookie checked.
+function M.create_pixmap_checked(conn, depth, pid, drawable, w, h)
+    return xcb_core.xcb_create_pixmap_checked(conn, depth, pid,
+        drawable, w, h)
+end
+
+function M.free_pixmap(conn, pid)
+    xcb_core.xcb_free_pixmap(conn, pid)
+end
+
+-- Crea un graphics context con valores por defecto.
+function M.create_gc_checked(conn, cid, drawable)
+    return xcb_core.xcb_create_gc_checked(conn, cid, drawable, 0, nil)
+end
+
+function M.free_gc(conn, gc)
+    xcb_core.xcb_free_gc(conn, gc)
+end
+
+-- Sube una imagen cruda al servidor. `data` es un string Lua con
+-- bytes. `format` es M.IMAGE_FORMAT.ZPixmap (2) para imagenes
+-- normales. Devuelve el cookie checked.
+function M.put_image_checked(conn, drawable, gc, w, h, x, y, depth, format, data)
+    local len = #data
+    local data_ptr = ffi.cast("const uint8_t*", data)
+    return xcb_core.xcb_put_image_checked(
+        conn, format or M.IMAGE_FORMAT.ZPixmap,
+        drawable, gc, w, h, x, y, 0, depth, len, data_ptr)
+end
+
+-- Cambia atributos de ventana con mascara y valores genericos.
+-- `values` es un array con los valores EN EL ORDEN de los bits del
+-- mask (ver create_window). Diferente de change_window_attributes
+-- (que solo acepta EventMask).
+function M.change_window_attributes_values(conn, win, mask, values)
+    if not values or #values == 0 then return end
+    local arr = ffi.new("uint32_t[?]", #values)
+    for i = 1, #values do arr[i - 1] = values[i] end
+    xcb_core.xcb_change_window_attributes(conn, win, mask, arr)
+end
+
+-- Comprueba un cookie checked. Devuelve nil si OK, o un string con
+-- el detalle del error (y libera el struct de error).
+function M.check_cookie(conn, cookie, context)
+    local err = xcb_core.xcb_request_check(conn, cookie)
+    if err ~= nil then
+        local code = err.error_code
+        local major = err.major_code
+        local minor = err.minor_code
+        ffi.C.free(err)
+        return string.format("%s: error_code=%d major=%d minor=%d",
+            context or "?", code, major, minor)
+    end
+    return nil
+end
+
+
+-- =====================================================================
+-- XShape: mascara de recorte para ventanas no rectangulares
+-- =====================================================================
+local _shape_lib
+local function get_shape_lib()
+    if _shape_lib == nil then
+        local ok, lib = pcall(ffi.load, "libxcb-shape.so.0")
+        _shape_lib = ok and lib or false
+        if not ok then
+            log.warn("xcb", "libxcb-shape.so.0 no disponible")
+        end
+    end
+    return _shape_lib or nil
+end
+
+-- =====================================================================
+-- Estado del teclado (solo lectura, no interfiere con hotkeys)
+-- =====================================================================
+
+-- Devuelve el keymap actual: 32 bytes con los bits de teclas
+-- pulsadas. No consume eventos, no interfiere con sxhkd.
+-- Milisegundos del wall clock. Usado por animaciones que necesitan
+-- progreso por tiempo real, no por cuenta de ticks.
+function M.now_ms()
+    local tv = ffi.new("struct timeval")
+    ffi.C.gettimeofday(tv, nil)
+    return tonumber(tv.tv_sec) * 1000 + math.floor(tonumber(tv.tv_usec) / 1000)
+end
+
+function M.query_keymap(conn)
+    local cookie = xcb_core.xcb_query_keymap(conn)
+    local err = ffi.new("xcb_generic_error_t*[1]")
+    local reply = xcb_core.xcb_query_keymap_reply(conn, cookie, err)
+    if err[0] ~= nil then ffi.C.free(err[0]); return nil end
+    if reply == nil then return nil end
+    local keys = ffi.new("uint8_t[32]")
+    for i = 0, 31 do keys[i] = reply.keys[i] end
+    ffi.C.free(reply)
+    return keys
+end
+
+function M.key_pressed(keymap, keycode)
+    if not keymap then return false end
+    local byte = math.floor(keycode / 8)
+    local shift = keycode % 8
+    local b = tonumber(keymap[byte]) or 0
+    return bit.band(b, bit.lshift(1, shift)) ~= 0
+end
+
+-- =====================================================================
+-- XShape
+-- =====================================================================
+M.SHAPE_OP = {
+    Set = 0, Union = 1, Intersect = 2, Subtract = 3, Invert = 4,
+}
+M.SHAPE_KIND = {
+    Bounding = 0, Clip = 1, Input = 2,
+}
+
+-- Generico: aplica una lista de rectangulos como mascara.
+-- rects = {{x, y, w, h}, ...}. opts.op default Set, opts.kind default Bounding.
+function M.shape_rectangles(conn, wid, rects, opts)
+    local lib = get_shape_lib()
+    if not lib then return nil, "libxcb-shape no disponible" end
+    opts = opts or {}
+    local op = opts.op or M.SHAPE_OP.Set
+    local kind = opts.kind or M.SHAPE_KIND.Bounding
+    local n = #rects
+    if n == 0 then
+        -- Mascara vacia
+        local empty = ffi.new("xcb_rectangle_t[1]")
+        empty[0].x = 0; empty[0].y = 0
+        empty[0].width = 0; empty[0].height = 1
+        lib.xcb_shape_rectangles(conn, op, kind, 0, wid, 0, 0, 1, empty)
+        return true
+    end
+    local arr = ffi.new("xcb_rectangle_t[?]", n)
+    for i = 1, n do
+        local r = rects[i]
+        arr[i - 1].x = r[1]
+        arr[i - 1].y = r[2]
+        arr[i - 1].width  = r[3]
+        arr[i - 1].height = r[4]
+    end
+    lib.xcb_shape_rectangles(conn, op, kind, 0, wid, 0, 0, n, arr)
+    return true
+end
+
+-- Limpia la mascara (ventana vuelve a ser rectangular).
+function M.shape_clear(conn, wid, kind)
+    local lib = get_shape_lib()
+    if not lib then return nil, "libxcb-shape no disponible" end
+    -- Un rectangulo mayor que la ventana: X lo recorta al bounding.
+    lib.xcb_shape_rectangles(conn, M.SHAPE_OP.Set,
+        kind or M.SHAPE_KIND.Bounding, 0, wid, 0, 0, 0, nil)
+    return true
+end
+
+-- Mascara desde un pixmap (bitmap 1-bit). Pixmap negro en cualquier
+-- bit -> fuera; blanco -> dentro.
+function M.shape_mask(conn, wid, pixmap, x, y, opts)
+    local lib = get_shape_lib()
+    if not lib then return nil, "libxcb-shape no disponible" end
+    opts = opts or {}
+    lib.xcb_shape_mask(conn,
+        opts.op or M.SHAPE_OP.Set,
+        opts.kind or M.SHAPE_KIND.Bounding,
+        wid, x or 0, y or 0, pixmap)
+    return true
+end
+
+-- Combina la mascara de otra ventana.
+function M.shape_combine(conn, dst, src, opts)
+    local lib = get_shape_lib()
+    if not lib then return nil, "libxcb-shape no disponible" end
+    opts = opts or {}
+    lib.xcb_shape_combine(conn,
+        opts.op or M.SHAPE_OP.Set,
+        opts.dst_kind or M.SHAPE_KIND.Bounding,
+        opts.src_kind or M.SHAPE_KIND.Bounding,
+        dst, opts.x or 0, opts.y or 0, src)
+    return true
+end
+
+-- Desplaza la mascara existente.
+function M.shape_offset(conn, wid, x, y, kind)
+    local lib = get_shape_lib()
+    if not lib then return nil, "libxcb-shape no disponible" end
+    lib.xcb_shape_offset(conn,
+        kind or M.SHAPE_KIND.Bounding, wid, x or 0, y or 0)
+    return true
+end
+
+-- Helper de alto nivel: mascara redondeada con opcion de altura visible.
+-- visible_h: si se especifica, solo las ultimas visible_h filas se
+-- muestran (efecto de slide desde abajo).
+function M.shape_rounded_rect(conn, wid, w, h, r, visible_h)
+    visible_h = math.max(0, math.min(visible_h or h, h))
+    if visible_h < 1 then
+        return M.shape_rectangles(conn, wid, {})
+    end
+
+    r = math.min(r or 0, math.floor(h / 2), math.floor(w / 2))
+    local y_start = h - visible_h
+    local rects = {}
+    local r2 = r * r
+
+    -- Formula unica por fila. La mascara debe coincidir con la
+    -- forma pintada por draw_bg en TODAS las filas, tambien las
+    -- que quedan dentro de la parte redondeada de arriba o abajo.
+    -- Filas consecutivas con el mismo dx se fusionan en un rect.
+    local prev_dx = nil
+    local run_y0 = nil
+
+    local function flush_run(y_end)
+        if prev_dx ~= nil then
+            local rw = w - 2 * prev_dx
+            if rw > 0 then
+                rects[#rects + 1] = { prev_dx, run_y0,
+                                       rw, y_end - run_y0 }
+            end
+        end
+    end
+
+    for y = y_start, h - 1 do
+        local dx = 0
+        if y < r then
+            local dy = r - y - 0.5
+            local sq = r2 - dy * dy
+            if sq > 0 then dx = r - math.floor(math.sqrt(sq) + 0.5) end
+        elseif y >= h - r then
+            local dy = y - (h - r) + 0.5
+            local sq = r2 - dy * dy
+            if sq > 0 then dx = r - math.floor(math.sqrt(sq) + 0.5) end
+        end
+        if dx < 0 then dx = 0 end
+
+        if dx ~= prev_dx then
+            if prev_dx ~= nil then flush_run(y) end
+            prev_dx = dx
+            run_y0 = y
+        end
+    end
+    if prev_dx ~= nil then flush_run(h) end
+
+    return M.shape_rectangles(conn, wid, rects)
 end
 
 return M

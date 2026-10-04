@@ -57,10 +57,11 @@ local function ratio_to_fraction(r)
 end
 
 local WINDOW_TYPE_BY_KIND = {
-    normal = "_NET_WM_WINDOW_TYPE_NORMAL",
-    dock   = "_NET_WM_WINDOW_TYPE_DOCK",
-    dialog = "_NET_WM_WINDOW_TYPE_DIALOG",
-    menu   = "_NET_WM_WINDOW_TYPE_MENU",
+    normal  = "_NET_WM_WINDOW_TYPE_NORMAL",
+    dock    = "_NET_WM_WINDOW_TYPE_DOCK",
+    dialog  = "_NET_WM_WINDOW_TYPE_DIALOG",
+    menu    = "_NET_WM_WINDOW_TYPE_MENU",
+    desktop = "_NET_WM_WINDOW_TYPE_DESKTOP",
 }
 
 function Window.new(a, b)
@@ -144,7 +145,11 @@ function Window.new(a, b)
 
     local is_child = (opts.kind == "child" and opts.parent_window ~= nil)
     local is_transient = (opts.kind == "transient" and opts.parent_window ~= nil)
-    local override = (opts.kind == "menu") or is_child
+    local override = opts.override_redirect
+    if override == nil then
+        override = (opts.kind == "menu" or opts.kind == "desktop") or is_child
+    end
+    local kind = opts.kind or "normal"
 
     -- Para child: parent es la ventana padre (X11 child window).
     -- Para el resto: parent es root.
@@ -159,6 +164,9 @@ function Window.new(a, b)
         parent = xcb_parent,
         event_mask = event_mask,
         override_redirect = override,
+        background_pixmap = opts.background_pixmap,
+        background_pixel  = opts.background_pixel,
+        backing_store     = opts.backing_store,
     })
     if wid == nil then
         log.error("window", "create_window fallo: %s", cerr or "(sin detalle)")
@@ -196,9 +204,11 @@ function Window.new(a, b)
         xcb.set_wm_normal_hints(self.conn, wid, hints)
     end
 
+    -- Una ventana desktop nunca debe recibir foco de teclado.
+    local wants_input = (kind ~= "desktop")
     xcb.set_wm_hints(self.conn, wid, {
         flags = xcb.ICCCM.WM_HINT_INPUT,
-        input = true,
+        input = wants_input,
     })
 
     local instance = opts.app_name   or "lanetk"
@@ -211,8 +221,6 @@ function Window.new(a, b)
     xcb.change_property(self.conn, wid,
         self.atoms.WM_CLASS, self.atoms.STRING, 8,
         #instance + 1 + #class + 1, buf)
-
-    local kind = opts.kind or "normal"
 
     -- Si es child o transient y hay parent_window, marcar la relacion.
     local parent_win = opts.parent_window
