@@ -624,6 +624,13 @@ function Window:_shutdown()
     if self.destroyed then return end
     self.destroyed = true
     self.running = false
+    -- Liberar el grab del puntero si esta ventana lo tenia activo.
+    -- Sin esto, cerrar una ventana con grab deja al cliente
+    -- capturando el puntero globalmente. Las demás ventanas dejan
+    -- de recibir clicks.
+    pcall(function()
+        xcb.ungrab_pointer(self.conn)
+    end)
     self.server:remove_window(self)
     if self.image_cr then cairo.destroy_context(self.image_cr) end
     if self.image_surface then cairo.destroy_surface(self.image_surface) end
@@ -687,6 +694,13 @@ function Window:_dispatch(etype, ev)
     elseif etype == xcb.EVENT.ConfigureNotify then
         local cev = ffi.cast("xcb_configure_notify_event_t*", ev)
         if cev.width < 1 or cev.height < 1 then return end
+        -- Actualizar x/y también. El WM puede mover la ventana tras
+        -- el map inicial (política de tiling), y sin esta
+        -- actualización self.x/self.y quedan con los valores
+        -- originales. Eso rompe cualquier cálculo de coordenadas
+        -- relativas a la ventana, como el posicionamiento de
+        -- menús contextuales.
+        self.x, self.y = cev.x, cev.y
         if cev.width ~= self.width or cev.height ~= self.height then
             self.width, self.height = cev.width, cev.height
 

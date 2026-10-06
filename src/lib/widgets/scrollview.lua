@@ -264,7 +264,11 @@ function ScrollView:on_mouse_press(mx, my, button)
     if button == 1 and self.on_click then
         self.on_click(item, idx)
     elseif button == 3 and self.on_right_click then
-        self.on_right_click(item, idx)
+        -- Pasar también las coordenadas locales al widget. El
+        -- consumidor las necesita para anclar menús contextuales.
+        -- Retrocompatible: los handlers que solo esperan
+        -- (item, idx) ignoran los argumentos extra.
+        self.on_right_click(item, idx, mx, my)
     end
 end
 
