@@ -22,6 +22,35 @@ local M = {}
 local _root  = nil
 local _index = nil
 local _cache = {}       -- "name:size" -> surface | false
+local _lanetk_root = nil
+
+-- Detecta la raíz de LaneTK a partir de la ubicación de este
+-- propio archivo (src/lib/icons.lua). Sube tres niveles:
+--   <root>/src/lib/icons.lua  ->  <root>
+-- Se cachea el resultado. Si falla la detección, devuelve nil.
+local function detect_lanetk_root()
+    if _lanetk_root ~= nil then return _lanetk_root or nil end
+    local info = debug.getinfo(1, "S")
+    local src = info and info.source or ""
+    src = src:gsub("^@", "")
+    -- src es algo como ".../src/lib/icons.lua"
+    local dir = src:match("^(.*)/[^/]+$")
+    if not dir then
+        _lanetk_root = false
+        return nil
+    end
+    -- Subir de <root>/src/lib a <root>
+    local root = dir:match("^(.*)/src/lib$")
+    if not root then
+        _lanetk_root = false
+        return nil
+    end
+    _lanetk_root = root
+    return root
+end
+
+M = M or {}
+M.detect_lanetk_root = detect_lanetk_root
 
 -- ── Índice ────────────────────────────────────────────────────────
 
@@ -60,13 +89,35 @@ local function scan_tree(dir, ext, prefix_pattern)
 end
 
 local function build_index()
-    local root = M.root()
-    -- SVG primero: si un nombre existe en ambos formatos, gana el SVG.
-    local idx = scan_tree(root .. "/icons-src", "svg", "icons%-src/(.+)$")
-    local png = scan_tree(root .. "/icons-png", "png", "icons%-png/[^/]+/(.+)$")
-    for k, v in pairs(png) do
-        idx[k] = idx[k] or v
+    -- Escanea dos roots en orden de prioridad:
+    --   1. El directorio del consumidor (PWD o set_root).
+    --      Sirve para iconos propios de una aplicación concreta.
+    --   2. La raíz de LaneTK. Es donde viven los iconos comunes
+    --      (files/, tabs/, logout/). Como cada satélite corre
+    --      desde su propio directorio, sin este segundo root no
+    --      encontraría los iconos del toolkit.
+    local idx = {}
+
+    local function scan_root(root)
+        if not root or root == "" then return end
+        -- SVG primero: si un nombre existe en ambos formatos, gana el SVG.
+        local svg_idx = scan_tree(root .. "/icons-src", "svg",
+            "icons%-src/(.+)$")
+        local png_idx = scan_tree(root .. "/icons-png", "png",
+            "icons%-png/[^/]+/(.+)$")
+        for k, v in pairs(svg_idx) do
+            idx[k] = idx[k] or v
+        end
+        for k, v in pairs(png_idx) do
+            idx[k] = idx[k] or v
+        end
     end
+
+    -- Root del consumidor primero (mayor prioridad).
+    scan_root(M.root())
+    -- Root de LaneTK como fallback.
+    scan_root(detect_lanetk_root())
+
     return idx
 end
 

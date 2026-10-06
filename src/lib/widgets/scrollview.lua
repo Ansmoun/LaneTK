@@ -208,10 +208,17 @@ function ScrollView:_damage_row(idx)
     local first = math.floor(self.offset / row_h)
     local rel = idx - first - 1
     if rel < 0 then return end
-    local y0 = self.y0 + rel * row_h
+    -- Restar la fraccion del offset para alinear el damage con la
+    -- posicion real de la fila. Sin esto, con offsets que no son
+    -- multiplos exactos de row_height (por ejemplo el tick de la
+    -- rueda cuando vale media fila), el rectangulo queda desplazado
+    -- por esa fraccion y el hover deja una banda sin repintar.
+    local frac = self.offset - first * row_h
+    local y0 = self.y0 + rel * row_h - frac
     local y1 = y0 + row_h
     if y0 >= self.y1 then return end
     if y1 > self.y1 then y1 = self.y1 end
+    if y0 < self.y0 then y0 = self.y0 end
     self.window:add_damage(self.x0, y0, self.x1, y1)
 end
 
