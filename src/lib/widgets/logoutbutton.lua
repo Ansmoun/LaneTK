@@ -48,8 +48,24 @@ function LogoutButton.new(opts)
     self.max_w, self.max_h = self.width, self.height
 
     if self.icon then
-        self.icon_light = cairo.load_png_cached(self.icon_dir .. self.icon .. ".png")
-        self.icon_dark  = cairo.load_png_cached(self.icon_dir .. self.icon .. "-dark.png")
+        -- Resolver via lib.icons primero, que prefiere SVG y cae
+        -- a PNG. El widget antes solo cargaba PNG directo, y tras
+        -- la migracion a SVG los iconos quedaban invisibles.
+        local ok_icons, icons = pcall(require, "lib.icons")
+        if ok_icons and icons then
+            self.icon_light = icons.surface(self.icon, self.icon_size)
+            self.icon_dark  = icons.surface(self.icon .. "-dark",
+                                            self.icon_size)
+        end
+        -- Fallback a PNG directo desde icon_dir.
+        if not self.icon_light then
+            self.icon_light = cairo.load_png_cached(
+                self.icon_dir .. self.icon .. ".png")
+        end
+        if not self.icon_dark then
+            self.icon_dark = cairo.load_png_cached(
+                self.icon_dir .. self.icon .. "-dark.png")
+        end
     end
 
     self.hover_t = 0
