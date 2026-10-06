@@ -80,7 +80,16 @@ function M.new_state(names)
         if names.options then names_buf.options = names.options end
         names_ptr = names_buf
     else
-        -- Leer env vars como hace xkbcommon en otros toolkits.
+        -- Orden de resolución:
+        --   1. Variables XKB_DEFAULT_* (override manual del usuario)
+        --   2. setxkbmap -query (layout actual del servidor X11)
+        --   3. nil -> xkbcommon usa su default (us)
+        --
+        -- El paso 2 es importante: X11 tiene su propio layout
+        -- configurado por xorg.conf o setxkbmap, y xkbcommon no
+        -- lo consulta por su cuenta. Sin esto, un sistema con
+        -- layout latam, es o fr termina interpretando las teclas
+        -- como si fueran us.
         local function env(name) return os.getenv(name) end
         local r, m, l, v, o =
             env("XKB_DEFAULT_RULES"),
@@ -88,6 +97,24 @@ function M.new_state(names)
             env("XKB_DEFAULT_LAYOUT"),
             env("XKB_DEFAULT_VARIANT"),
             env("XKB_DEFAULT_OPTIONS")
+
+        -- Si no hay env vars, consultar el servidor X.
+        if not (r or m or l or v or o) then
+            local h = io.popen("setxkbmap -query 2>/dev/null")
+            if h then
+                for line in h:lines() do
+                    local k, val = line:match("^([%w]+):%s*(.+)$")
+                    if k == "rules"   then r = val
+                    elseif k == "model"   then m = val
+                    elseif k == "layout"  then l = val
+                    elseif k == "variant" then v = val
+                    elseif k == "options" then o = val
+                    end
+                end
+                h:close()
+            end
+        end
+
         if r or m or l or v or o then
             names_buf = ffi.new("xkb_rule_names")
             if r then names_buf.rules   = r end
