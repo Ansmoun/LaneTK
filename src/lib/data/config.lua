@@ -6,17 +6,35 @@ local U = require("lib.helpers.util")
 local M = {}
 
 local HOME = os.getenv("HOME")
-M.CONF   = HOME .. "/.config/awesome/conf.lua"
-M.THEMES = HOME .. "/.config/awesome/ui/themes"
-M.PALETTES = HOME .. "/.config/lanetk/palettes"
+M.CONF     = HOME .. "/.config/lane/conf.lua"
+M.THEMES   = HOME .. "/.config/lane/themes"
+M.PALETTES = HOME .. "/.config/lane/palettes"
 
 -- Paletas del proyecto lanetk. Si no existe esa carpeta, cae al
 -- directorio de awesome.
-local function palettes_dir()
-    local f = io.open(M.PALETTES .. "/ayu.lua", "r")
-    if f then f:close(); return M.PALETTES end
-    return HOME .. "/.config/awesome/ui/palettes"
+-- Resuelve el directorio de paletas en runtime. Orden:
+--   1. <cwd>/palettes/ (lo que quiere un consumidor como LANE)
+--   2. $LANE_PALETTES_DIR
+--   3. ~/.config/lane/palettes
+local function dir_exists(p)
+    local f = io.popen("test -d '" .. p .. "' && echo yes 2>/dev/null")
+    if not f then return false end
+    local ok = f:read("*l") == "yes"
+    f:close()
+    return ok
 end
+
+local function palettes_dir()
+    if dir_exists("palettes") then return "palettes" end
+    local env = os.getenv("LANE_PALETTES_DIR")
+    if env and dir_exists(env) then return env end
+    return M.PALETTES
+end
+
+-- Versión pública. Igual que la local, la exponemos porque
+-- consumidores (como el tab Configuración) necesitan saber dónde
+-- viven las paletas para construir paths a los archivos.
+M.palettes_dir = palettes_dir
 
 -- Lee una clave string de conf.lua
 function M.get(key)

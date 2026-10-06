@@ -69,7 +69,8 @@ local function find_palette_dir()
 end
 
 M.PALETTE_DIR = find_palette_dir()
-M.CONFIG_FILE = (os.getenv("HOME") or "") .. "/.config/lanetk/palette"
+M.CONFIG_FILE = os.getenv("THEME_CONFIG_FILE")
+    or ((os.getenv("HOME") or "") .. "/.config/lane/palette")
 
 function M.find_palette_path()
     -- 1. Env var

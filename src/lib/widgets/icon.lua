@@ -54,11 +54,22 @@ function Icon.new(opts)
 
     self.width  = opts.width  or self.native_w
     self.height = opts.height or self.native_h
+    self.fit    = opts.fit     -- nil | "contain"
 
-    self.min_w = self.width
-    self.min_h = self.height
-    self.max_w = self.width
-    self.max_h = self.height
+    if self.fit == "contain" then
+        -- Se ajusta al rect disponible manteniendo aspect ratio.
+        self.min_w = opts.min_width  or 0
+        self.min_h = opts.min_height or 0
+        self.max_w = 10000
+        self.max_h = 10000
+    else
+        -- Tamaño fijo (default). El padre reserva exactamente
+        -- width x height.
+        self.min_w = self.width
+        self.min_h = self.height
+        self.max_w = self.width
+        self.max_h = self.height
+    end
 
     return self
 end
@@ -105,27 +116,49 @@ end
 function Icon:draw(cr)
     if not self.surface then return end
 
-    local x = self.x0
-    local y = self.y0
-    if self.halign == "center" then
-        x = self.x0 + (self:getWidth() - self.width) / 2
-    elseif self.halign == "right" then
-        x = self.x1 - self.width
-    end
-    if self.valign == "center" then
-        y = self.y0 + (self:getHeight() - self.height) / 2
-    elseif self.valign == "bottom" then
-        y = self.y1 - self.height
+    -- Clip al rect asignado. Sin esto, si el padre da un rect más
+    -- pequeño que width/height, el dibujo se sale del margen.
+    cairo.save(cr)
+    cairo.rectangle(cr, self.x0, self.y0,
+        self:getWidth(), self:getHeight())
+    cairo.clip(cr)
+
+    local w, h = self.width, self.height
+    local x, y = self.x0, self.y0
+
+    if self.fit == "contain" then
+        -- Escalar al rect disponible manteniendo aspect ratio.
+        local avail_w = self:getWidth()
+        local avail_h = self:getHeight()
+        if self.native_w > 0 and self.native_h > 0 then
+            local scale = math.min(avail_w / self.native_w,
+                                   avail_h / self.native_h)
+            w = self.native_w * scale
+            h = self.native_h * scale
+        end
+        x = self.x0 + (avail_w - w) / 2
+        y = self.y0 + (avail_h - h) / 2
+    else
+        if self.halign == "center" then
+            x = self.x0 + (self:getWidth() - self.width) / 2
+        elseif self.halign == "right" then
+            x = self.x1 - self.width
+        end
+        if self.valign == "center" then
+            y = self.y0 + (self:getHeight() - self.height) / 2
+        elseif self.valign == "bottom" then
+            y = self.y1 - self.height
+        end
     end
 
     if self.color then
-        cairo.draw_surface_tinted(cr, self.surface, x, y,
-            self.width, self.height,
+        cairo.draw_surface_tinted(cr, self.surface, x, y, w, h,
             self.color[1], self.color[2], self.color[3])
     else
-        cairo.draw_surface(cr, self.surface, x, y,
-            self.width, self.height)
+        cairo.draw_surface(cr, self.surface, x, y, w, h)
     end
+
+    cairo.restore(cr)
 end
 
 function Icon:on_mouse_press(mx, my, button)
