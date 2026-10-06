@@ -11,15 +11,14 @@
 .backups/
 
 # Documentacion: solo api.md y notes.md se publican
-/docs/README.md
-/docs/README-bar.md
-/docs/README-data.md
-/docs/README-helpers.md
-/docs/README-lib.md
-/docs/README-tabs.md
-/docs/README-widgets.md
-/docs/Apendice(E).txt
-/docs/pendientes.txt
+# Fragmentos de la referencia de API
+/docs/indice.md
+/docs/core.md
+/docs/infra.md
+/docs/widgets.md
+/docs/data.md
+/docs/helpers.md
+/docs/integracion.md
 
 # Archivo accidental
 80%,
