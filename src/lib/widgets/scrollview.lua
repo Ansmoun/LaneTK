@@ -258,16 +258,22 @@ function ScrollView:on_wheel(direction)
 end
 
 function ScrollView:on_mouse_press(mx, my, button)
+    -- Si el servidor está bloqueando input (un modal acaba de
+    -- cerrarse por un click fuera), ignorar. Sin esto, el release
+    -- que cierra el ContextMenu se propaga al listado y abre la
+    -- carpeta bajo el cursor sin que el usuario lo haya pedido.
+    if self.window and self.window.server
+       and self.window.server.is_input_blocked
+       and self.window.server:is_input_blocked() then
+        return
+    end
+
     local idx = math.floor((my + self.offset) / self.row_height) + 1
     local item = self.items[idx]
     if not item then return end
     if button == 1 and self.on_click then
         self.on_click(item, idx)
     elseif button == 3 and self.on_right_click then
-        -- Pasar también las coordenadas locales al widget. El
-        -- consumidor las necesita para anclar menús contextuales.
-        -- Retrocompatible: los handlers que solo esperan
-        -- (item, idx) ignoran los argumentos extra.
         self.on_right_click(item, idx, mx, my)
     end
 end

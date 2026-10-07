@@ -451,6 +451,13 @@ function M.grab_pointer(conn, window)
         4 + 8 + 64,  -- ButtonPress|ButtonRelease|PointerMotion
         1, 1, 0, 0, 0)
     xcb_core.xcb_flush(conn)
+    -- Sync forzado: el grab se aplica en el servidor X de forma
+    -- asíncrona. Sin este roundtrip, cualquier click que llegue
+    -- en los próximos milisegundos puede pasar al widget
+    -- subyacente en lugar de ser capturado por el grab. Bug
+    -- típico: abrir un ContextMenu con un click y que el
+    -- siguiente click sobre una carpeta se cuele sin intención.
+    M.sync(conn)
 end
 
 function M.ungrab_pointer(conn)

@@ -98,6 +98,28 @@ function Server:count()
     return n
 end
 
+-- Bloqueo temporal de input.
+--
+-- Se activa cuando un modal (ContextMenu, diálogo) cierra por un
+-- click fuera. Durante la ventana de bloqueo (típicamente 150ms)
+-- los widgets ignoran los clicks. Sin esto, el release que cierra
+-- el modal se propaga al widget subyacente y ejecuta su acción
+-- (por ejemplo, abrir la carpeta que el usuario no quería abrir).
+--
+-- El problema ocurre porque el ungrab_pointer se procesa de forma
+-- asíncrona en el X server: el cliente puede recibir el siguiente
+-- click antes de que el servidor aplique el ungrab, aunque el
+-- cliente ya haya destruido el modal.
+function Server:block_input(ms)
+    self._input_blocked_until = timer.now_ms() + (ms or 150)
+end
+
+function Server:is_input_blocked()
+    local t = self._input_blocked_until
+    if not t then return false end
+    return timer.now_ms() < t
+end
+
 function Server:stop()  self.running = false end
 function Server:flush() xcb.flush(self.conn) end
 

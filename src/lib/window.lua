@@ -782,6 +782,18 @@ function Window:_dispatch(etype, ev)
         local bev = ffi.cast("xcb_button_press_event_t*", ev)
         local x, y = bev.event_x, bev.event_y
 
+        -- Interceptor de clicks. Un modal (ContextMenu, diálogo)
+        -- puede instalarlo para consumir clicks que lleguen a esta
+        -- ventana mientras está abierto. Es un respaldo del
+        -- grab_pointer de X11: si el grab falla o se libera antes
+        -- de tiempo, el interceptor cierra el modal y evita que
+        -- el click ejecute la acción subyacente.
+        if self._click_interceptor then
+            if self._click_interceptor(x, y, bev.detail, bev.state) then
+                return
+            end
+        end
+
         -- 1. Enrutar por el arbol de widgets si existe.
         if self.root then
             local hit = self.root:getByXY(x, y)
