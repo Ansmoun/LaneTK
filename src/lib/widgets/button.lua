@@ -55,6 +55,19 @@ function Button.new(opts)
     return self
 end
 
+-- Permite cambiar los colores en runtime. Acepta una tabla con
+-- los mismos nombres que las opts del constructor (normal, hover,
+-- pressed, border, text). Solo actualiza las claves presentes.
+function Button:set_colors(colors)
+    if type(colors) ~= "table" then return end
+    if colors.normal  then self.color_normal  = colors.normal  end
+    if colors.hover   then self.color_hover   = colors.hover   end
+    if colors.pressed then self.color_pressed = colors.pressed end
+    if colors.border  then self.color_border  = colors.border  end
+    if colors.text    then self.color_text    = colors.text    end
+    self:damage()
+end
+
 function Button:set_text(text)
     self.text = text
     self.text_w, self.text_h = pango.measure(self.text, self.font)

@@ -39,12 +39,18 @@ end
 -- Version multi-fd. Recibe una lista de fds (enteros) y un timeout.
 -- Devuelve tres valores:
 --   any_readable (bool)  -- algun fd tiene datos o error
---   any_broken   (bool)  -- algun fd esta en error o hung-up
+--   xcb_broken   (bool)  -- SOLO si fd_list[1] (XCB) esta en error
 --   ready        (tabla) -- ready[i] = true si fd_list[i] esta listo
 --
--- Un fd puede estar listo por POLLIN (hay datos) o por POLLERR/
--- POLLHUP (esta roto). En ambos casos el consumidor debe actuar.
--- El signalfd, por ejemplo, se marca POLLIN.
+-- 'xcb_broken' es verdadero unicamente cuando el PRIMER fd de la
+-- lista (por convencion, la conexion X) esta en POLLHUP/POLLERR/
+-- POLLNVAL. Un fd externo (PTY, signalfd) que se cierre NO debe
+-- tumbar todo el server; su callback se encarga.
+--
+-- Bug previo: cualquier fd roto devolvia any_broken = true, y el
+-- server lo interpretaba como "XCB roto" -> cerraba la app entera.
+-- Con un PTY en la lista, cuando el shell moria, el server mataba
+-- la ventana aunque el XCB estuviera perfectamente vivo.
 function M.wait_multi(fd_list, timeout_ms)
     local n = #fd_list
     if n == 0 then return false, false, {} end
@@ -60,7 +66,7 @@ function M.wait_multi(fd_list, timeout_ms)
     if ret < 0 then return false, false, {} end
 
     local any_readable = false
-    local any_broken   = false
+    local xcb_broken   = false
     local ready = {}
 
     for i = 1, n do
@@ -71,12 +77,14 @@ function M.wait_multi(fd_list, timeout_ms)
             if bit.band(rev, M.POLLHUP)  ~= 0 or
                bit.band(rev, M.POLLERR)  ~= 0 or
                bit.band(rev, M.POLLNVAL) ~= 0 then
-                any_broken = true
+                if i == 1 then
+                    xcb_broken = true
+                end
             end
         end
     end
 
-    return any_readable, any_broken, ready
+    return any_readable, xcb_broken, ready
 end
 
 return M

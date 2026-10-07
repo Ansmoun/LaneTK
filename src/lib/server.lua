@@ -355,14 +355,12 @@ function Server:_loop()
         for _, e in ipairs(self.extra_fds or {}) do
             fd_list[#fd_list + 1] = e.fd
         end
-        local readable, broken, ready = poll.wait_multi(fd_list, timeout)
-        -- Si el fd esta en POLLHUP/POLLERR/POLLNVAL, el otro
-        -- extremo del socket ya no existe (alguien cerro la
-        -- conexion X del cliente con XKillClient). Sin esto, poll
-        -- devuelve inmediatamente en cada llamada y el loop gira a
-        -- decenas de miles de iteraciones por segundo hasta que
-        -- maten el proceso. Salimos limpio.
-        if broken then
+        local readable, xcb_broken, ready = poll.wait_multi(fd_list, timeout)
+        -- Solo cerramos si el fd de XCB (fd_list[1]) esta roto.
+        -- Un extra_fd roto (PTY, signalfd) NO debe tumbar la app:
+        -- su callback lo detecta (read devuelve nil) y maneja el
+        -- cierre de forma local (cerrar tab, ventana, etc.).
+        if xcb_broken then
             log.error("server", "fd de XCB roto (POLLHUP/POLLERR), cerrando")
             self.running = false
             break
