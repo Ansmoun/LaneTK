@@ -333,36 +333,49 @@ function Server:_loop()
         -- eventos quedan invisibles hasta que llegue algo nuevo.
         local processed = self:_process_events()
 
-        -- Si no habia nada pendiente, bloquearse hasta el proximo
-        -- evento, timer, o fd externo legible.
-        if not processed then
-            local timeout = self:_next_timer_delay()
-            local fd_list = { self.fd }
-            for _, e in ipairs(self.extra_fds or {}) do
-                fd_list[#fd_list + 1] = e.fd
-            end
-            local readable, broken, ready = poll.wait_multi(fd_list, timeout)
-            -- Si el fd esta en POLLHUP/POLLERR/POLLNVAL, el otro
-            -- extremo del socket ya no existe (alguien cerro la
-            -- conexion X del cliente con XKillClient). Sin esto, poll
-            -- devuelve inmediatamente en cada llamada y el loop gira a
-            -- decenas de miles de iteraciones por segundo hasta que
-            -- maten el proceso. Salimos limpio.
-            if broken then
-                log.error("server", "fd de XCB roto (POLLHUP/POLLERR), cerrando")
-                self.running = false
-                break
-            end
-            if readable then
-                self:_process_events()
-            end
-            -- Marcar los fds externos que esten listos. El callback
-            -- de cada uno los procesa.
-            if ready then
-                for i = 2, #fd_list do
-                    if ready[i] then
-                        self.extra_fds[i - 1].ready = true
-                    end
+        -- Poll SIEMPRE, incluso si ya procesamos eventos XCB.
+        -- Bug previo: poll solo se llamaba cuando processed era
+        -- false. Con muchas apps XCB casi siempre tiene eventos
+        -- pendientes (MotionNotify, ConfigureNotify, Expose), asi
+        -- que poll nunca se ejecutaba, los extra_fds (PTY, fds
+        -- externos) nunca se marcaban ready, y sus callbacks
+        -- quedaban mudos. Descubierto con laneter: el PTY no se
+        -- leia nunca, el prompt del shell no aparecia.
+        --
+        -- Fix: si ya procesamos eventos XCB, timeout=0 (volver
+        -- rapido al loop). Si no, usar el timeout de los timers.
+        local timeout
+        if processed then
+            timeout = 0
+        else
+            timeout = self:_next_timer_delay()
+        end
+
+        local fd_list = { self.fd }
+        for _, e in ipairs(self.extra_fds or {}) do
+            fd_list[#fd_list + 1] = e.fd
+        end
+        local readable, broken, ready = poll.wait_multi(fd_list, timeout)
+        -- Si el fd esta en POLLHUP/POLLERR/POLLNVAL, el otro
+        -- extremo del socket ya no existe (alguien cerro la
+        -- conexion X del cliente con XKillClient). Sin esto, poll
+        -- devuelve inmediatamente en cada llamada y el loop gira a
+        -- decenas de miles de iteraciones por segundo hasta que
+        -- maten el proceso. Salimos limpio.
+        if broken then
+            log.error("server", "fd de XCB roto (POLLHUP/POLLERR), cerrando")
+            self.running = false
+            break
+        end
+        if readable then
+            self:_process_events()
+        end
+        -- Marcar los fds externos que esten listos. El callback
+        -- de cada uno los procesa.
+        if ready then
+            for i = 2, #fd_list do
+                if ready[i] then
+                    self.extra_fds[i - 1].ready = true
                 end
             end
         end
