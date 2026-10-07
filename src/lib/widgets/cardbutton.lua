@@ -46,9 +46,15 @@ function CardButton.new(opts)
     self.min_w, self.max_w = self.width, self.width
     self.min_h, self.max_h = self.height, self.height
 
-    if self.icon then
-        self.icon_surface = cairo.load_png_cached(
-            self.icon_dir .. self.icon .. ".png")
+    -- Resolver via lib.icons: prefiere SVG sobre PNG, y busca en
+    -- icons-src/ del consumidor y de LaneTK (por sufijo). El
+    -- camino anterior (load_png_cached sobre icon_dir..icon..png)
+    -- no funcionaba desde la migracion a SVG: ademas de buscar
+    -- PNG, construia la ruta sin el directorio de seccion
+    -- (screen-full.png en vez de screenshot/screen-full.svg).
+    if self.icon and self.icon ~= "" then
+        self.icon_surface = require("lib.icons").surface(
+            self.icon, self.icon_size)
     end
 
     self.selected = false
