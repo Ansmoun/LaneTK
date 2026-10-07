@@ -173,6 +173,17 @@ function M.surface(src, bucket)
     return surf
 end
 
+-- Solo devuelve el path canonico del cache para un src+bucket,
+-- SIN comprobar existencia ni generar. Util para consumidores que
+-- quieren hacer "carga si existe, sino ignora" (evita bloquear el
+-- event loop generando de golpe).
+function M.cache_path(src, bucket)
+    bucket = bucket or "normal"
+    if not M.BUCKETS[bucket] then return nil end
+    local p = cache_path_for(src, bucket)
+    return p
+end
+
 -- Borra la cache completa de thumbnails. Afecta a TODOS los
 -- thumbnailers del sistema (es el directorio estandar). Es lo
 -- que hacen gnome-thumbnail-cleaner y equivalentes.
