@@ -13,6 +13,76 @@ local M = {}
 M.ALIGN = { LEFT = 0, CENTER = 1, RIGHT = 2 }
 M.WRAP  = { WORD = 0, CHAR = 1, WORD_CHAR = 2 }
 
+-- Cache de PangoLayouts por (texto, fuente, ancho_wrap, align,
+-- spacing). Crear un PangoLayout es caro: cada llamada hace
+-- fontconfig lookup, shaping del texto, layout de lineas. En
+-- widgets con texto estático (listas, labels) reusar el mismo
+-- layout reduce el coste del draw casi a cero.
+--
+-- El cache crece indefinidamente. Está pensado para widgets con
+-- texto acotado (nombres de archivo, labels de formulario). Para
+-- textos muy variables, llamar M.clear_layout_cache
+-- periódicamente.
+local _layout_cache = {}
+local _layout_count = 0
+local LAYOUT_CACHE_LIMIT = 5000
+
+function M.clear_layout_cache()
+    for _, layout in pairs(_layout_cache) do
+        gobject.g_object_unref(layout)
+    end
+    _layout_cache = {}
+    _layout_count = 0
+end
+
+local function layout_cache_key(text, font, opts)
+    opts = opts or {}
+    return table.concat({
+        font or "",
+        tostring(opts.wrap_width or 0),
+        tostring(opts.align or 0),
+        text,
+    }, "\0")
+end
+
+-- Devuelve un layout cacheado para (texto, fuente, opts). El
+-- llamador NO debe liberarlo: es propiedad del cache.
+local function get_cached_layout(cr, text, font, opts)
+    local key = layout_cache_key(text, font, opts)
+    local cached = _layout_cache[key]
+    if cached then
+        return cached
+    end
+
+    -- Crear uno nuevo.
+    local layout = pangocairo.pango_cairo_create_layout(cr)
+    pango_core.pango_layout_set_text(layout, text, -1)
+
+    local desc
+    if font then
+        desc = pango_core.pango_font_description_from_string(font)
+        pango_core.pango_layout_set_font_description(layout, desc)
+        pango_core.pango_font_description_free(desc)
+    end
+
+    if opts and opts.wrap_width then
+        pango_core.pango_layout_set_width(layout, opts.wrap_width * 1024)
+        pango_core.pango_layout_set_wrap(layout, opts.wrap or M.WRAP.WORD)
+    end
+    if opts and opts.align then
+        pango_core.pango_layout_set_alignment(layout, opts.align)
+    end
+
+    -- Evitar que el cache crezca sin límite.
+    if _layout_count >= LAYOUT_CACHE_LIMIT then
+        M.clear_layout_cache()
+    end
+
+    _layout_cache[key] = layout
+    _layout_count = _layout_count + 1
+    return layout
+end
+
 function M.measure(text, font)
     local dummy = cairo_lib.cairo_image_surface_create(0, 1, 1)
     local cr = cairo_lib.cairo_create(dummy)
@@ -63,10 +133,19 @@ local function draw_layout(cr, x, y, layout, font, opts)
 end
 
 function M.draw_text(cr, x, y, text, font, opts)
-    local layout = pangocairo.pango_cairo_create_layout(cr)
-    pango_core.pango_layout_set_text(layout, text, -1)
-    draw_layout(cr, x, y, layout, font, opts)
-    gobject.g_object_unref(layout)
+    local layout = get_cached_layout(cr, text, font, opts)
+    -- pango_cairo_update_layout es necesario cuando cambia el
+    -- contexto Cairo (por ejemplo al cambiar de superficie). En
+    -- nuestro caso el contexto es el mismo durante toda la vida
+    -- del layout cacheado, así que no lo llamamos.
+    --
+    -- El color y la posición NO son parte del layout: son del
+    -- contexto Cairo y se aplican aquí.
+    opts = opts or {}
+    cairo_lib.cairo_set_source_rgb(cr,
+        opts.r or 1.0, opts.g or 1.0, opts.b or 1.0)
+    cairo_lib.cairo_move_to(cr, x, y)
+    pangocairo.pango_cairo_show_layout(cr, layout)
 end
 
 

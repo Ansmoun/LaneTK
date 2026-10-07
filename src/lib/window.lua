@@ -518,6 +518,21 @@ end
 -- y luego blitea la region dañada a X11 en una sola operacion. Esto
 -- elimina el parpadeo de "dibujar base, luego contenido".
 function Window:draw()
+    -- Contador de draws por segundo para diagnóstico.
+    if os.getenv("LANETK_DRAW_COUNT") == "1" then
+        self._draw_count = (self._draw_count or 0) + 1
+        local now = os.time()
+        if not self._draw_reset or now > self._draw_reset then
+            if self._draw_reset then
+                io.stderr:write(string.format(
+                    "[draw] %d draws en el último segundo\n",
+                    self._draw_count))
+            end
+            self._draw_count = 1
+            self._draw_reset = now + 1
+        end
+    end
+
     -- Flag de relayout pendiente
     if self._needs_relayout then
         self._needs_relayout = false

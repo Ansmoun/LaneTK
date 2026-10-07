@@ -148,6 +148,14 @@ function M.surface_height(surface)
     return cairo_lib.cairo_image_surface_get_height(surface)
 end
 
+-- Dibuja un surface usando filtro NEAREST. Ideal para thumbnails
+-- y miniaturas que se dibujan a un tamaño similar al original.
+-- Evita el coste del filtro GOOD (bilinear/bicubic) cuando no
+-- aporta calidad visual.
+function M.draw_surface_fast(cr, surface, x, y, w, h)
+    M.draw_surface(cr, surface, x, y, w, h, M.FILTER.FAST)
+end
+
 -- Dibuja un surface en (x, y) con un tamano destino (w, h).
 -- Si w/h son nil, usa el tamano nativo de la imagen.
 function M.draw_surface(cr, surface, x, y, w, h, filter)

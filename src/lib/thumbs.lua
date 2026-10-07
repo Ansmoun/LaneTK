@@ -33,9 +33,16 @@ function M.path_for(src)
 end
 
 -- Asegura que existe el thumbnail y devuelve su path, o nil.
+local _mkdir_done = false
+
 function M.ensure(src, size)
     size = size or SIZE
-    os.execute("mkdir -p " .. shq(CACHE_DIR))
+    -- mkdir solo la primera vez. Con muchas imágenes, un
+    -- os.execute por cada una es cientos de subprocesos inútiles.
+    if not _mkdir_done then
+        os.execute("mkdir -p " .. shq(CACHE_DIR))
+        _mkdir_done = true
+    end
     local dst = CACHE_DIR .. "/" .. hash_path(src) .. "_" .. size .. ".png"
     if exists(dst) then return dst end
     -- Sin pad: el thumbnail queda del tamaño del aspect ratio
