@@ -40,7 +40,10 @@ function M.async_shell(srv, cmd, cb)
     os.execute("chmod +x " .. sh_file .. " 2>/dev/null; " ..
                sh_file .. " >/dev/null 2>&1 &")
 
-    -- Poller: cada 150ms comprueba si existe .done
+    -- Poller: cada 150ms comprueba si existe .done.
+    -- add_timer (periodico) es lo correcto aqui: queremos
+    -- reintentar indefinidamente hasta que aparezca el archivo.
+    -- NO migrar a add_timeout, que solo dispararia una vez.
     local h = {}
     h.timer = srv:add_timer(150, function()
         local df = io.open(done_file, "r")

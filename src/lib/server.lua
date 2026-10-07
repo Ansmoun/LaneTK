@@ -123,6 +123,12 @@ end
 function Server:stop()  self.running = false end
 function Server:flush() xcb.flush(self.conn) end
 
+-- Timer PERIODICO. El callback se dispara cada interval_ms hasta
+-- que alguien llame cancel() sobre el handle devuelto. Si no se
+-- cancela, el timer sigue vivo indefinidamente aunque el
+-- consumidor haya perdido la referencia.
+--
+-- Para un disparo unico, usar add_timeout.
 function Server:add_timer(interval_ms, callback)
     local now = timer.now_ms()
     local handle = {
@@ -130,6 +136,32 @@ function Server:add_timer(interval_ms, callback)
         next_at  = now + interval_ms,
         callback = callback,
         cancelled = false,
+        one_shot  = false,
+    }
+    self.timers[handle] = true
+    return {
+        cancel = function()
+            handle.cancelled = true
+            self.timers[handle] = nil
+        end
+    }
+end
+
+-- Timer de UN SOLO disparo. Se auto-cancela antes de invocar el
+-- callback, asi que aunque el callback pierda la referencia o
+-- falle, el timer no vuelve a disparar.
+--
+-- El handle devuelto permite cancelar antes del disparo (util si
+-- el consumidor quiere abortar, p.ej. porque el usuario hizo otra
+-- accion en la ventana de espera).
+function Server:add_timeout(delay_ms, callback)
+    local now = timer.now_ms()
+    local handle = {
+        interval = delay_ms,
+        next_at  = now + delay_ms,
+        callback = callback,
+        cancelled = false,
+        one_shot  = true,
     }
     self.timers[handle] = true
     return {
@@ -153,7 +185,15 @@ function Server:_run_timers()
     end
     for _, handle in ipairs(due) do
         if self.timers[handle] then
-            handle.next_at = now + handle.interval
+            -- One-shot: sacar del set ANTES de ejecutar. Asi
+            -- aunque el callback falle o pierda la referencia, el
+            -- timer no vuelve a disparar. Para periodicos,
+            -- reprogramar como siempre.
+            if handle.one_shot then
+                self.timers[handle] = nil
+            else
+                handle.next_at = now + handle.interval
+            end
             local ok, err = pcall(handle.callback)
             if not ok then
                 log.error("timer", "callback fallo: %s", tostring(err))

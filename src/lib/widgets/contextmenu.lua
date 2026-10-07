@@ -402,7 +402,10 @@ function ContextMenu:_schedule_hover_out()
     if self._is_submenu then return end
     if self._hover_out_timer then return end
     if not self.srv then return end
-    self._hover_out_timer = self.srv:add_timer(HOVER_OUT_MS, function()
+    -- add_timeout: one-shot. Un solo disparo cierra el menu si el
+    -- mouse no volvio a entrar. Con add_timer (periodico) el
+    -- handle quedaba vivo tras el primer disparo.
+    self._hover_out_timer = self.srv:add_timeout(HOVER_OUT_MS, function()
         self._hover_out_timer = nil
         if self.win then
             self:close()

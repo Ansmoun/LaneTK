@@ -80,11 +80,13 @@ function Actions:_run(action)
         self.feedback_timer:cancel()
     end
 
-    -- Timer para limpiar feedback
+    -- Timer para limpiar feedback. add_timeout es one-shot: se
+    -- auto-cancela antes de disparar, asi que no queda un handle
+    -- vivo disparando cada feedback_time ms.
     self.feedback_timer = (self.window and self.window.server
-        and self.window.server:add_timer(self.feedback_time, function()
-            self.feedback:set_text("")
+        and self.window.server:add_timeout(self.feedback_time, function()
             self.feedback_timer = nil
+            self.feedback:set_text("")
         end))
 end
 

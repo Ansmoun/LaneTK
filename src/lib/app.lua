@@ -137,9 +137,8 @@ function App:rebuild()
     -- Reconstruir el arbol en el proximo tick. Sin esto, creariamos
     -- widgets nuevos desde dentro del propio callback del boton
     -- Aplicar (que vive en el arbol que se esta por reemplazar).
-    local tm
-    tm = self.srv:add_timer(20, function()
-        tm:cancel()
+    -- add_timeout: one-shot auto-cancelado.
+    self.srv:add_timeout(20, function()
         self._rebuilding = false
         if not self.srv.running then return end
         if not self.win or self.win.destroyed then return end
